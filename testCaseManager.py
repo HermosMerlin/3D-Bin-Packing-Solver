@@ -2,8 +2,9 @@ import json
 import os
 
 class TestCaseManager:
-    def __init__(self, testDir="test"):
-        self.testDir = testDir
+    def __init__(self, testPath):
+        self.testDir = "test"
+        self.testDir = os.path.join(testPath, self.testDir)
 
     def loadTestCases(self):
         """加载测试目录下的所有JSON文件"""

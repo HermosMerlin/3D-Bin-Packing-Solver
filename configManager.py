@@ -2,8 +2,8 @@ import json
 import os
 
 class ConfigManager:
-    def __init__(self, configFile="config.json"):
-        self.configFile = configFile
+    def __init__(self, configPath):
+        self.configFile = os.path.join(configPath, "config.json")
         self.config = self.loadConfig()
 
     def loadConfig(self):

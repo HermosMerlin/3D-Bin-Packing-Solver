@@ -23,7 +23,7 @@ class Visualizer:
         :return: 可视化文件路径
         """
         try:
-            print(f"  开始生成可视化: {testName} - 组合{result['testIndex']}")
+            # print(f"  开始生成可视化: {testName} - 组合{result['testIndex']}")
 
             # 检查必要数据
             if 'solution' not in result:
@@ -133,9 +133,6 @@ class Visualizer:
                         'center_z': center_z,
                         'spec_key': spec_key
                     })
-
-                    print(f"    货物{i+1}: ID={itemId}, 规格=({item.l}x{item.w}x{item.h}, 重量={item.weight}), "
-                          f"位置=({x},{y},{z}), 尺寸=({dx},{dy},{dz})")
                 else:
                     print(f"    警告: 未找到货物ID={itemId}")
 

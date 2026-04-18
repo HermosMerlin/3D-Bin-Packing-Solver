@@ -13,8 +13,9 @@ def main():
     print("=" * 80)
 
     # 初始化各个管理器
-    configManager = ConfigManager()
-    testCaseManager = TestCaseManager()
+    scriptDir = os.path.dirname(os.path.abspath(__file__))
+    configManager = ConfigManager(configPath=scriptDir)
+    testCaseManager = TestCaseManager(testPath=scriptDir)
 
     # 获取配置和测试用例
     config = configManager.getConfig()
@@ -31,11 +32,11 @@ def main():
 
     # 获取基础结果目录
     outputConfig = configManager.getOutputConfig()
-    baseResultsDir = outputConfig["resultsDir"]
+    baseResultsDir = "results"
 
     # 创建本次运行的顶级文件夹（以时间戳命名）
     runTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    topLevelDir = os.path.join(baseResultsDir, f"{runTimestamp}")
+    topLevelDir = os.path.join(scriptDir, baseResultsDir, f"{runTimestamp}")
     os.makedirs(topLevelDir, exist_ok=True)
 
     # 打印本次运行的目录路径
@@ -65,7 +66,7 @@ def main():
         results.extend(testCaseResults)
 
         # 生成可视化（如果启用）
-        if outputConfig.get("enableVisualization", False):
+        if outputConfig.get("enableVisualization", True):
             for result in testCaseResults:
                 print(f"    生成可视化...")
                 vizFile = visualizer.generateVisualization(result, testCaseName)

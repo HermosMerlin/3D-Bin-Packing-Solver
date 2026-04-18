@@ -14,7 +14,7 @@
     },
     "output": {
         "resultsDir": "results",
-        "saveDetailedLog": true,
+        "saveDetailedLog": false,
         "showPlacementText": false,
         "enableVisualization": true
     }
