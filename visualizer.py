@@ -219,7 +219,7 @@ class Visualizer:
             os.makedirs(testFolder, exist_ok=True)
 
             # 保存图形
-            vizFile = os.path.join(testFolder, f"visualization_combo{result['testIndex']}.png")
+            vizFile = os.path.join(testFolder, f"pic_{result['testIndex']}.png")
             absVizFile = os.path.abspath(vizFile)
 
             print(f"  保存可视化到: {absVizFile}")
