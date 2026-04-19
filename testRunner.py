@@ -162,6 +162,7 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
         "weightRate": solution.weightRate,
         "placedCount": len(solution.placedItems),
         "algorithmParams": {
+            "algorithmType": algorithmType,
             "iterations": iterations,
             "randomRate": randomRate,
             "seed": seed,

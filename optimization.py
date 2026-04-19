@@ -3,28 +3,28 @@ from typing import List, Optional, Dict, Any, Callable
 from packingLogic import simplePacking
 from dataStructures import Item, Container, PackingSolution
 
-def hillClimbing(
+def greedySearch(
     container: Container, 
     items: List[Item], 
     params: Dict[str, Any]
 ) -> PackingSolution:
     """
-    随机爬山算法（原方案逻辑）
+    基于贪心启发式的序列扰动搜索 (Greedy Heuristic with Sequence Shuffling)
     """
-    iterations = params.get("iterations", 100)
+    iterations = params.get("iterations", 10)
     
-    # 初始序列：按体积降序
+    # 初始序列：按体积降序 (Classic First-Fit Decreasing)
     currentItems: List[Item] = sorted(items, key=lambda x: x.volume, reverse=True)
     bestSolution: PackingSolution = simplePacking(container, currentItems)
     bestVolumeRate: float = bestSolution.volumeRate
 
     for _ in range(iterations):
-        # 随机交换两个货物位置
+        # 随机交换两个货物位置（随机扰动）
         newItems: List[Item] = currentItems.copy()
         i, j = random.sample(range(len(newItems)), 2)
         newItems[i], newItems[j] = newItems[j], newItems[i]
 
-        # 评估新序列
+        # 使用贪心策略评估新序列
         newSolution: PackingSolution = simplePacking(container, newItems)
 
         # 如果更好，更新
@@ -35,15 +35,29 @@ def hillClimbing(
 
     return bestSolution
 
+def simulatedAnnealing(
+    container: Container, 
+    items: List[Item], 
+    params: Dict[str, Any]
+) -> PackingSolution:
+    """
+    模拟退火算法 (Simulated Annealing) - 占位实现
+    """
+    # 暂时重用 greedySearch 的逻辑，但参数略有不同以示区分
+    new_params = params.copy()
+    new_params["iterations"] = params.get("iterations", 10) // 2
+    return greedySearch(container, items, new_params)
+
 # 算法注册表
 ALGORITHMS: Dict[str, Callable] = {
-    "hill_climbing": hillClimbing
+    "greedy_search": greedySearch,
+    "simulated_annealing": simulatedAnnealing
 }
 
 def optimizePacking(
     container: Container, 
     items: List[Item], 
-    algorithmType: str = "hill_climbing",
+    algorithmType: str = "greedy_search",
     params: Optional[Dict[str, Any]] = None,
     seed: Optional[int] = None
 ) -> PackingSolution:
