@@ -16,6 +16,12 @@
         "resultsDir": "results",
         "saveDetailedLog": false,
         "showPlacementText": false,
-        "enableVisualization": true
+        "enableVisualization": true,
+        "saveStaticImage": false,
+        "logging": {
+            "consoleLevel": "INFO",
+            "fileLevel": "DEBUG",
+            "saveToFile": true
+        }
     }
 }

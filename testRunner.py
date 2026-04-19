@@ -1,22 +1,26 @@
 import time
 import random
-from dataStructures import Item, Container
+from typing import List, Dict, Any, Tuple
+from dataStructures import Item, Container, PackingSolution
 from optimization import optimizePacking
+from logger import get_logger
+from testCaseManager import TestCaseManager
 
-def generateTimeSeed():
+logger = get_logger("testRunner")
+
+def generateTimeSeed() -> int:
     """生成基于时间的随机种子"""
     timestamp = int(time.time() * 1000)
     randomPart = random.randint(0, 9999)
     return timestamp + randomPart
 
-def generateItemsFromTypes(itemTypes):
+def generateItemsFromTypes(itemTypes: List[Dict[str, Any]]) -> List[Item]:
     """根据货物规格和数量生成货物列表"""
-    items = []
+    items: List[Item] = []
     itemIdCounter = 1
 
     for itemType in itemTypes:
         count = itemType["count"]
-
         for i in range(count):
             item = Item(
                 id=itemIdCounter,
@@ -30,19 +34,11 @@ def generateItemsFromTypes(itemTypes):
 
     return items
 
-def runSingleTest(testCase, config, paramCombination, testIndex, totalTests):
-    """
-    运行单个测试用例的单个参数组合
-    :param testCase: 测试用例数据
-    :param config: 配置信息
-    :param paramCombination: 参数组合
-    :param testIndex: 测试索引
-    :param totalTests: 总测试数
-    :return: 测试结果
-    """
+def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any], 
+                  paramCombination: Dict[str, Any], testIndex: int, totalTests: int) -> Dict[str, Any]:
+    """运行单个测试用例"""
     startTime = time.time()
 
-    # 创建集装箱
     containerData = testCase["container"]
     container = Container(
         L=containerData["L"],
@@ -51,33 +47,18 @@ def runSingleTest(testCase, config, paramCombination, testIndex, totalTests):
         maxWeight=containerData["maxWeight"]
     )
 
-    # 根据货物规格生成货物列表
     items = generateItemsFromTypes(testCase["itemTypes"])
-
-    # 获取参数组合
     iterations = paramCombination["iterations"]
     randomRate = paramCombination["randomRate"]
     useTimeSeed = paramCombination["useTimeSeed"]
 
-    # 生成随机种子
-    if useTimeSeed:
-        seed = generateTimeSeed()
-    else:
-        seed = 42
+    seed = generateTimeSeed() if useTimeSeed else 42
 
-    # 运行优化算法
-    solution = optimizePacking(
-        container,
-        items,
-        iterations=iterations,
-        randomRate=randomRate,
-        seed=seed
+    solution: PackingSolution = optimizePacking(
+        container, items, iterations=iterations, randomRate=randomRate, seed=seed
     )
 
-    # 计算运行时间
     endTime = time.time()
-    executionTime = endTime - startTime
-
     return {
         "testName": testCase["name"],
         "testIndex": testIndex,
@@ -95,46 +76,28 @@ def runSingleTest(testCase, config, paramCombination, testIndex, totalTests):
             "seed": seed,
             "useTimeSeed": useTimeSeed
         },
-        "executionTime": executionTime
+        "executionTime": endTime - startTime
     }
 
-def runTestSuite(testCase, config, testCaseManager, defaultParams):
-    """
-    运行一个测试用例的所有参数组合
-    :param testCase: 测试用例数据
-    :param config: 配置信息
-    :param testCaseManager: 测试用例管理器
-    :param defaultParams: 默认参数
-    :return: 该测试用例的所有结果
-    """
-    # 获取有效参数（测试集参数优先，否则使用默认值）
+def runTestSuite(testCase: Dict[str, Any], config: Dict[str, Any], 
+                 testCaseManager: TestCaseManager, defaultParams: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+    """运行一个测试用例的所有参数组合"""
     effectiveParams = testCaseManager.getEffectiveParams(
-        testCase.get("algorithmParams", {}),
-        defaultParams
+        testCase.get("algorithmParams", {}), defaultParams
     )
 
-    # 生成参数组合
     paramCombinations = testCaseManager.generateParamCombinations(effectiveParams)
-    testCaseName = testCase["name"]
+    testCaseName: str = testCase["name"]
 
-    print(f"\n测试用例: {testCaseName}")
-    print(f"参数组合数: {len(paramCombinations)}")
+    logger.info(f"\n测试用例: {testCaseName}")
+    logger.info(f"参数组合数: {len(paramCombinations)}")
 
-    # 存储当前测试用例的所有结果
-    testCaseResults = []
-
-    # 运行每个参数组合
+    testCaseResults: List[Dict[str, Any]] = []
     for i, paramComb in enumerate(paramCombinations, 1):
-        print(f"  运行组合 {i}/{len(paramCombinations)}: "
-              f"迭代={paramComb['iterations']}, 随机率={paramComb['randomRate']}")
+        logger.info(f"  运行组合 {i}/{len(paramCombinations)}: "
+                    f"迭代={paramComb['iterations']}, 随机率={paramComb['randomRate']}")
 
-        result = runSingleTest(
-            testCase,
-            config,
-            paramComb,
-            i,
-            len(paramCombinations)
-        )
+        result = runSingleTest(testCase, config, paramComb, i, len(paramCombinations))
         testCaseResults.append(result)
 
     return testCaseResults, testCaseName
