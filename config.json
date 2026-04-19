@@ -1,9 +1,9 @@
 {
     "algorithmDefaults": {
-        "algorithmType": "hill_climbing",
+        "algorithmType": ["greedy_search", "simulated_annealing"],
         "iterations": {
-            "min": 10,
-            "max": 10,
+            "min": 50,
+            "max": 50,
             "step": 50
         },
         "randomRate": {

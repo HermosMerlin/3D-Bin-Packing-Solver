@@ -12,7 +12,7 @@ class ResultSaver:
         os.makedirs(self.resultsDir, exist_ok=True)
 
     def saveResults(self, results: List[Dict[str, Any]], testName: str) -> str:
-        """保存测试结果到文件"""
+        """保存测试结果到文件，并生成综合对比报告"""
         testFolder = os.path.join(self.resultsDir, testName)
         os.makedirs(testFolder, exist_ok=True)
 
@@ -20,70 +20,66 @@ class ResultSaver:
         resultFile = os.path.join(testFolder, f"results_{timestamp}.txt")
         absResultFile = os.path.abspath(resultFile)
 
+        # 找出最优方案（以空间利用率为准）
+        bestResult = max(results, key=lambda x: x['volumeRate']) if results else None
+
         with open(absResultFile, 'w', encoding='utf-8') as f:
             f.write("=" * 80 + "\n")
-            f.write(f"三维装箱算法测试结果 - {testName}\n")
+            f.write(f"三维装箱算法综合对比报告 - {testName}\n")
             f.write(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n\n")
 
-            totalExecutionTime = 0.0
+            # 1. 性能对比汇总表
+            f.write("【1. 性能汇总对比】\n")
+            header = "| 索引 | 算法类型 | 空间利用率 | 重量利用率 | 装载数 | 运行耗时 | 状态 |"
+            f.write(header + "\n")
+            f.write("|" + "---| " * 7 + "|\n")
+            
+            for r in results:
+                status = " BEST " if r == bestResult and len(results) > 1 else "      "
+                alg_name = r['algorithmParams'].get('algorithmType', 'unknown')
+                line = (f"| {r['testIndex']:^4} | {alg_name:<10} | {r['volumeRate']:>9.2%} | "
+                        f"{r['weightRate']:>9.2%} | {r['placedCount']:>3}/{len(r['items']):<3} | "
+                        f"{r['executionTime']:>7.3f}s | {status:^6} |")
+                f.write(line + "\n")
+            f.write("\n")
 
+            # 2. 算法详情
+            f.write("【2. 算法执行详情】\n")
             for result in results:
-                container = result['container']
-                containerInfo = f"{container.L}x{container.W}x{container.H}, 最大载重{container.maxWeight}"
+                f.write(f">> 组合 {result['testIndex']}/{result['totalTests']} [{result['algorithmParams'].get('algorithmType')}]\n")
+                
+                # 容器信息
+                c = result['container']
+                f.write(f"   容器: {c.L}x{c.W}x{c.H}, 最大载重 {c.maxWeight}\n")
+                
+                # 算法具体参数
+                params = result['algorithmParams']
+                param_str = ", ".join([f"{k}={v}" for k, v in params.items() if k not in ['algorithmType', 'seed']])
+                f.write(f"   参数: {param_str} (Seed: {params.get('seed')})\n")
+                
+                # 结果指标
+                f.write(f"   结果: 空间={result['volumeRate']:.2%}, 重量={result['weightRate']:.2%}, ")
+                f.write(f"耗时={result['executionTime']:.3f}秒\n")
 
-                f.write(f"组合 {result['testIndex']}/{result['totalTests']}\n")
-                f.write(f"集装箱尺寸: {containerInfo}\n")
+                # 如果开启了详细记录，且有缓存命中，则说明一下
+                if result.get('isCached'):
+                    f.write("   状态: (从缓存加载)\n")
 
-                f.write("货物规格:\n")
-                totalItems = 0
-                for itemType in result['itemTypes']:
-                    count = itemType["count"]
-                    totalItems += count
-                    f.write(f"  类型{itemType['typeId']}: {itemType['l']}x{itemType['w']}x{itemType['h']}, ")
-                    f.write(f"重量{itemType['weight']}, 数量{count}\n")
-                f.write(f"货物总数: {totalItems}\n")
+                if self.outputConfig.get("showPlacementText", True) and self.outputConfig.get("saveDetailedLog", False):
+                    f.write("   放置序列(前10个): ")
+                    placement_summary = "; ".join([f"{pid}" for pid, *_ in result['solution'].placedItems[:10]])
+                    f.write(f"{placement_summary}...\n")
 
-                algoParams = result['algorithmParams']
-                f.write(f"算法参数: 迭代次数={algoParams['iterations']}, ")
-                f.write(f"随机率={algoParams['randomRate']}, ")
-                f.write(f"种子={algoParams['seed']}\n")
+                f.write("-" * 40 + "\n")
 
-                f.write(f"已放置货物: {result['placedCount']}/{totalItems}\n")
-                f.write(f"满容率: {result['volumeRate']:.2%}\n")
-                f.write(f"满载率: {result['weightRate']:.2%}\n")
-                f.write(f"运行时间: {result['executionTime']:.3f} 秒\n")
+            # 3. 结论
+            if bestResult:
+                f.write("\n【3. 测试结论】\n")
+                f.write(f"本次测试中表现最优的算法是: {bestResult['algorithmParams'].get('algorithmType')}\n")
+                f.write(f"最高空间利用率达到: {bestResult['volumeRate']:.2%}\n")
+                
+            f.write("\n" + "=" * 80 + "\n")
 
-                totalExecutionTime += result['executionTime']
-
-                if self.outputConfig.get("showPlacementText", True) and self.outputConfig.get("saveDetailedLog", True):
-                    f.write("放置方案(密集格式):\n")
-                    placementData = []
-                    for itemId, x, y, z, rotation in result['solution'].placedItems:
-                        placementData.append(f"{itemId}:({x},{y},{z},{rotation})")
-
-                    line = ""
-                    for i, data in enumerate(placementData):
-                        if len(line) + len(data) + 2 < 80:
-                            line += data + "; "
-                        else:
-                            f.write(f"  {line}\n")
-                            line = data + "; "
-                    if line:
-                        f.write(f"  {line}\n")
-
-                f.write("-" * 80 + "\n\n")
-
-            f.write("综合统计:\n")
-            avgVolumeRate = sum(r['volumeRate'] for r in results) / len(results)
-            avgWeightRate = sum(r['weightRate'] for r in results) / len(results)
-            avgExecutionTime = totalExecutionTime / len(results)
-
-            f.write(f"总组合数: {len(results)}\n")
-            f.write(f"平均满容率: {avgVolumeRate:.2%}\n")
-            f.write(f"平均满载率: {avgWeightRate:.2%}\n")
-            f.write(f"总运行时间: {totalExecutionTime:.3f} 秒\n")
-            f.write(f"平均运行时间: {avgExecutionTime:.3f} 秒\n")
-
-        logger.info(f"测试用例 '{testName}' 的结果已保存到: {absResultFile}")
+        logger.info(f"对比报告已生成: {absResultFile}")
         return absResultFile
