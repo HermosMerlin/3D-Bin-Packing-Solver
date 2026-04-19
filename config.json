@@ -1,3 +1,4 @@
+{
     "algorithmDefaults": {
         "iterations": {
             "min": 10,
@@ -25,3 +26,4 @@
             "saveToFile": true
         }
     }
+}
