@@ -2,8 +2,8 @@
     "algorithmDefaults": {
         "algorithmType": ["greedy_search", "simulated_annealing"],
         "iterations": {
-            "min": 50,
-            "max": 50,
+            "min": 100,
+            "max": 100,
             "step": 50
         },
         "randomRate": {
@@ -11,6 +11,9 @@
             "max": 0.1,
             "step": 0.1
         },
+        "initialTemp": 100.0,
+        "coolingRate": 0.98,
+        "minTemp": 0.01,
         "useTimeSeed": true
     },
     "output": {
