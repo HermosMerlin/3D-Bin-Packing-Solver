@@ -15,62 +15,67 @@ class Visualizer:
         os.makedirs(self.resultsDir, exist_ok=True)
 
     @staticmethod
-    def _derive_face_colors(base_rgba: Tuple[float, float, float]) -> Tuple[str, str, str]:
-        r, g, b = base_rgba
-        def clamp(v: float) -> float: return min(1.0, max(0.0, v))
-        def rgb_str(rf: float, gf: float, bf: float) -> str:
-            return f"rgb({int(clamp(rf)*255)},{int(clamp(gf)*255)},{int(clamp(bf)*255)})"
-
-        top = rgb_str(r*1.0 + 0.40*(1-r), g*1.0 + 0.40*(1-g), b*1.0 + 0.40*(1-b))
-        mid = rgb_str(r, g, b)
-        dark = rgb_str(r * 0.62, g * 0.62, b * 0.62)
-        return top, mid, dark
-
-    @staticmethod
-    def _box_surfaces(x: float, y: float, z: float, dx: float, dy: float, dz: float, 
-                      top_color: str, mid_color: str, dark_color: str) -> List[go.Surface]:
-        # 使用 2x2 网格定义 6 个面
-        face_defs = [
-            # 顶面 z=z+dz
-            (np.array([[x, x+dx],[x, x+dx]]), np.array([[y, y],[y+dy, y+dy]]), np.array([[z+dz, z+dz],[z+dz, z+dz]]), top_color),
-            # 底面 z=z
-            (np.array([[x, x+dx],[x, x+dx]]), np.array([[y, y],[y+dy, y+dy]]), np.array([[z, z],[z, z]]), dark_color),
-            # 左面 x=x
-            (np.array([[x, x],[x, x]]), np.array([[y, y+dy],[y, y+dy]]), np.array([[z, z],[z+dz, z+dz]]), mid_color),
-            # 右面 x=x+dx
-            (np.array([[x+dx, x+dx],[x+dx, x+dx]]), np.array([[y, y+dy],[y, y+dy]]), np.array([[z, z],[z+dz, z+dz]]), dark_color),
-            # 前面 y=y
-            (np.array([[x, x+dx],[x, x+dx]]), np.array([[y, y],[y, y]]), np.array([[z, z],[z+dz, z+dz]]), dark_color),
-            # 后面 y=y+dy
-            (np.array([[x, x+dx],[x, x+dx]]), np.array([[y+dy, y+dy],[y+dy, y+dy]]), np.array([[z, z],[z+dz, z+dz]]), mid_color),
-        ]
-        return [go.Surface(
-            x=gx, y=gy, z=gz,
-            surfacecolor=np.zeros((2, 2)),
-            colorscale=[[0, color], [1, color]],
-            showscale=False, opacity=1.0,
-            contours=dict(
-                x=dict(show=True, color='rgba(0,0,0,0.75)', width=3),
-                y=dict(show=True, color='rgba(0,0,0,0.75)', width=3),
-                z=dict(show=True, color='rgba(0,0,0,0.75)', width=3),
-            ),
-            lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0, roughness=1.0, fresnel=0.0),
-            hoverinfo='skip', showlegend=False
-        ) for gx, gy, gz, color in face_defs]
+    def _box_mesh(x: float, y: float, z: float, dx: float, dy: float, dz: float, 
+                  color: str, opacity: float = 1.0, hovertext: str = "") -> go.Mesh3d:
+        """使用 Mesh3d 创建立方体，保持不透明材质"""
+        return go.Mesh3d(
+            x=[x, x, x+dx, x+dx, x, x, x+dx, x+dx],
+            y=[y, y+dy, y+dy, y, y, y+dy, y+dy, y],
+            z=[z, z, z, z, z+dz, z+dz, z+dz, z+dz],
+            i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+            j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+            k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+            color=color,
+            opacity=opacity,
+            flatshading=True,
+            # 均衡的光照设置，确保立体感的同时面与面有区分
+            lighting=dict(ambient=0.5, diffuse=0.8, specular=0.1, roughness=0.5, fresnel=0.2),
+            lightposition=dict(x=100, y=200, z=150),
+            hoverinfo='text',
+            text=hovertext,
+            showlegend=False
+        )
 
     @staticmethod
-    def _container_wireframe(L: float, W: float, H: float) -> Tuple[List[Optional[float]], List[Optional[float]], List[Optional[float]]]:
+    def _box_wireframe(x: float, y: float, z: float, dx: float, dy: float, dz: float, 
+                       color: str = 'rgb(30,30,30)', width: int = 5) -> go.Scatter3d:
+        """适中厚度的轮廓线 (width=5) 并使用深灰色，平衡可见度与美观"""
         pts = [
-            [(0,0,0),(L,0,0)],[(L,0,0),(L,W,0)],[(L,W,0),(0,W,0)],[(0,W,0),(0,0,0)],
-            [(0,0,H),(L,0,H)],[(L,0,H),(L,W,H)],[(L,W,H),(0,W,H)],[(0,W,H),(0,0,H)],
-            [(0,0,0),(0,0,H)],[(L,0,0),(L,0,H)],[(L,W,0),(L,W,H)],[(0,W,0),(0,W,H)],
+            (x,y,z),(x+dx,y,z),(x+dx,y+dy,z),(x,y+dy,z),(x,y,z),
+            (x,y,z+dz),(x+dx,y,z+dz),(x+dx,y+dy,z+dz),(x,y+dy,z+dz),(x,y,z+dz),
+            (None,None,None),
+            (x,y,z),(x,y,z+dz),(None,None,None),
+            (x+dx,y,z),(x+dx,y,z+dz),(None,None,None),
+            (x+dx,y+dy,z),(x+dx,y+dy,z+dz),(None,None,None),
+            (x,y+dy,z),(x,y+dy,z+dz)
         ]
-        wx, wy, wz = [], [], []
-        for (x0,y0,z0),(x1,y1,z1) in pts:
-            wx += [float(x0),float(x1),None]
-            wy += [float(y0),float(y1),None]
-            wz += [float(z0),float(z1),None]
-        return wx, wy, wz
+        wx, wy, wz = zip(*pts)
+        return go.Scatter3d(
+            x=wx, y=wy, z=wz,
+            mode='lines',
+            line=dict(color=color, width=width),
+            hoverinfo='skip',
+            showlegend=False
+        )
+
+    @staticmethod
+    def _container_wireframe(L: float, W: float, H: float) -> go.Scatter3d:
+        pts = [
+            (0,0,0),(L,0,0),(L,W,0),(0,W,0),(0,0,0),
+            (0,0,H),(L,0,H),(L,W,H),(0,W,H),(0,0,H),
+            (None,None,None),
+            (L,0,0),(L,0,H),(None,None,None),
+            (L,W,0),(L,W,H),(None,None,None),
+            (0,W,0),(0,W,H)
+        ]
+        wx, wy, wz = zip(*pts)
+        return go.Scatter3d(
+            x=wx, y=wy, z=wz,
+            mode='lines',
+            line=dict(color='black', width=4),
+            hoverinfo='skip',
+            showlegend=False
+        )
 
     def generateVisualization(self, result: Dict[str, Any], testName: str) -> Optional[str]:
         try:
@@ -97,27 +102,34 @@ class Visualizer:
 
             spec_to_rgba: Dict[Tuple[float, float, float, float], Tuple[float, float, float]] = {}
             spec_to_legend_color: Dict[Tuple[float, float, float, float], str] = {}
-            # 用于检测同规格尺寸是否一致
             spec_to_actual_dims: Dict[Tuple[float, float, float, float], Set[Tuple[float, float, float]]] = {}
             color_counter = 0
 
             def get_dims(item: Item, rotation: int) -> Tuple[float, float, float]:
-                # 目前仅支持 3 种基础旋转，后续可扩展
+                # 0: (l, w, h), 1: (l, h, w), 2: (w, l, h), 3: (w, h, l), 4: (h, l, w), 5: (h, w, l)
+                if rotation == 0: return (item.l, item.w, item.h)
                 if rotation == 1: return (item.l, item.h, item.w)
-                if rotation == 2: return (item.h, item.w, item.l)
+                if rotation == 2: return (item.w, item.l, item.h)
+                if rotation == 3: return (item.w, item.h, item.l)
+                if rotation == 4: return (item.h, item.l, item.w)
+                if rotation == 5: return (item.h, item.w, item.l)
                 return (item.l, item.w, item.h)
 
             traces = []
+            seen_ids = set()
             for itemId, x, y, z, rotation in placedItems:
+                if itemId in seen_ids:
+                    logger.warning(f"    严重警告: 发现重复放置的货物 ID={itemId}")
+                seen_ids.add(itemId)
+
                 item = next((it for it in result['items'] if it.id == itemId), None)
                 if item is None:
-                    logger.warning(f"    警告: 未找到货物 ID={itemId}")
                     continue
 
                 dx, dy, dz = get_dims(item, rotation)
-                spec_key = (item.l, item.w, item.h, item.weight)
+                sorted_dims = tuple(sorted([item.l, item.w, item.h]))
+                spec_key = (*sorted_dims, item.weight)
 
-                # 记录并检查尺寸一致性
                 if spec_key not in spec_to_actual_dims:
                     spec_to_actual_dims[spec_key] = set()
                 spec_to_actual_dims[spec_key].add((dx, dy, dz))
@@ -129,23 +141,24 @@ class Visualizer:
                     spec_to_legend_color[spec_key] = f"rgb({r},{g},{b})"
                     color_counter += 1
 
-                base_rgba = spec_to_rgba[spec_key]
-                top_c, mid_c, dark_c = self._derive_face_colors(base_rgba)
-                traces.extend(self._box_surfaces(x, y, z, dx, dy, dz, top_c, mid_c, dark_c))
+                color_str = spec_to_legend_color[spec_key]
+                hover_text = f"ID: {item.id}<br>规格: {item.l}x{item.w}x{item.h}<br>当前姿态: {dx}x{dy}x{dz}<br>坐标: ({x},{y},{z})"
+                
+                # 添加 3D 网格体
+                traces.append(self._box_mesh(x, y, z, dx, dy, dz, color_str, hovertext=hover_text))
+                # 添加 3D 边缘线
+                traces.append(self._box_wireframe(x, y, z, dx, dy, dz))
 
-            # 检查并打印尺寸不一致的警告
             for spec, actual_dims in spec_to_actual_dims.items():
                 if len(actual_dims) > 1:
-                    logger.warning(f"  检测到规格 {spec} 存在多种渲染尺寸: {actual_dims}")
-                else:
-                    logger.debug(f"  规格 {spec} 渲染尺寸一致: {list(actual_dims)[0]}")
+                    logger.info(f"  规格 {spec} 使用了 {len(actual_dims)} 种旋转姿态: {actual_dims}")
 
             # 集装箱外框
-            cx, cy, cz = self._container_wireframe(L, W, H)
-            traces.append(go.Scatter3d(x=cx, y=cy, z=cz, mode='lines', line=dict(color='rgba(0,0,0,0.85)', width=3), showlegend=False, hoverinfo='skip'))
+            traces.append(self._container_wireframe(L, W, H))
 
             # 图例
-            for (l, w, h, wt), color_str in spec_to_legend_color.items():
+            for dims_and_wt, color_str in spec_to_legend_color.items():
+                l, w, h, wt = dims_and_wt
                 traces.append(go.Scatter3d(x=[None], y=[None], z=[None], mode='markers', marker=dict(size=10, color=color_str, symbol='square'), name=f"{l}×{w}×{h}, {wt}kg", showlegend=True))
 
             layout = go.Layout(
@@ -168,14 +181,13 @@ class Visualizer:
             fig.write_html(html_file, include_plotlyjs=True)
             logger.info(f"  HTML已保存: {html_file}")
 
-            # 根据配置决定是否保存静态图片
             if self.outputConfig.get("saveStaticImage", True):
                 try:
                     png_file = os.path.abspath(os.path.join(testFolder, f"pic_{result['testIndex']}.png"))
                     fig.write_image(png_file, width=1200, height=900, scale=1.5)
                     logger.info(f"  PNG已保存: {png_file}")
                 except Exception:
-                    logger.warning("  提示: PNG需要 kaleido")
+                    pass
 
             return html_file
         except Exception as e:
