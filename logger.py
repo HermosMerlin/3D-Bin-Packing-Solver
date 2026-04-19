@@ -1,6 +1,25 @@
 import logging
 import os
 import sys
+import re
+
+class PathDesensitizerFilter(logging.Filter):
+    """
+    日志过滤器：自动将绝对路径脱敏，防止泄露系统用户名等隐私信息
+    """
+    def __init__(self):
+        super().__init__()
+        # 匹配 Windows 和 Unix 绝对路径的正则（简化版）
+        # 重点匹配 C:\Users\xxx... 或 /home/xxx...
+        self.user_path_pattern = re.compile(
+            r'([a-zA-Z]:\\Users\\[^\s\\]+)|(/home/[^\s/]+)', 
+            re.IGNORECASE
+        )
+
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            record.msg = self.user_path_pattern.sub(r'<USER_HOME>', record.msg)
+        return True
 
 def setup_logging(log_level="INFO", log_file=None):
     """
@@ -24,11 +43,15 @@ def setup_logging(log_level="INFO", log_file=None):
     console_formatter = logging.Formatter('[%(levelname)s] %(message)s')
     file_formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] [%(name)s] - %(message)s')
 
+    # 定义统一的日志过滤器
+    path_filter = PathDesensitizerFilter()
+
     # 1. 配置终端输出 (stdout)
     # 解决 Windows 终端可能的编码问题
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(console_formatter)
     console_handler.setLevel(numeric_level)
+    console_handler.addFilter(path_filter)
     root_logger.addHandler(console_handler)
 
     # 2. 如果指定了文件，配置文件输出
@@ -41,6 +64,7 @@ def setup_logging(log_level="INFO", log_file=None):
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(logging.DEBUG) # 文件始终记录最详细的 DEBUG 信息
+        file_handler.addFilter(path_filter)
         root_logger.addHandler(file_handler)
 
     return root_logger
