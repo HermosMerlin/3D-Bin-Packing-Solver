@@ -67,45 +67,57 @@ def simplePacking(container: Container, items: List[Item]) -> PackingSolution:
     for item in itemsToPlace:
         placed = False
         
-        # 查找第一个能放下该货物的空间
+        # 尝试 6 种旋转姿态 (L, W, H)
+        # 0: (l, w, h), 1: (l, h, w), 2: (w, l, h), 3: (w, h, l), 4: (h, l, w), 5: (h, w, l)
+        possible_rotations = [
+            (item.l, item.w, item.h, 0),
+            (item.l, item.h, item.w, 1),
+            (item.w, item.l, item.h, 2),
+            (item.w, item.h, item.l, 3),
+            (item.h, item.l, item.w, 4),
+            (item.h, item.w, item.l, 5)
+        ]
+
         for i, space in enumerate(spaces):
-            if space.canFit(item):
-                # 检查载重限制
-                if solution.totalWeight + item.weight <= container.maxWeight:
-                    solution.addItem(item, space.x, space.y, space.z, item.rotation)
+            for orient_l, orient_w, orient_h, rot_id in possible_rotations:
+                # 检查此姿态是否能放入空间
+                if orient_l <= space.L and orient_w <= space.W and orient_h <= space.H:
+                    # 检查载重限制
+                    if solution.totalWeight + item.weight <= container.maxWeight:
+                        # 确定放置！
+                        solution.addItem(item, space.x, space.y, space.z, rot_id)
 
-                    # 分解剩余空间 (Guillotine 切割)
-                    newSpaces = [
-                        Space(space.x + item.l, space.y, space.z,
-                              space.L - item.l, space.W, space.H),
-                        Space(space.x, space.y + item.w, space.z,
-                              item.l, space.W - item.w, space.H),
-                        Space(space.x, space.y, space.z + item.h,
-                              item.l, item.w, space.H - item.h)
-                    ]
+                        # 分解剩余空间 (Guillotine 切割，使用当前姿态的尺寸)
+                        newSpaces = [
+                            Space(space.x + orient_l, space.y, space.z,
+                                  space.L - orient_l, space.W, space.H),
+                            Space(space.x, space.y + orient_w, space.z,
+                                  orient_l, space.W - orient_w, space.H),
+                            Space(space.x, space.y, space.z + orient_h,
+                                  orient_l, orient_w, space.H - orient_h)
+                        ]
 
-                    # 移除旧空间
-                    spaces.pop(i)
-                    
-                    # 添加新空间并过滤无效空间
-                    for ns in newSpaces:
-                        if ns.L > 0 and ns.W > 0 and ns.H > 0:
-                            spaces.append(ns)
-                    
-                    # 尝试合并空间以减少碎片化
-                    # 注意：频繁合并会降低速度，但能提高空间利用率
-                    # 这里采取每放置 5 个货物合并一次的折中方案，或者在空间较多时合并
-                    if len(spaces) > 10:
-                        spaces = mergeSpaces(spaces)
-                    
-                    # 重新排序空间以保证 FFD 效果
-                    spaces.sort(key=spaceSortKey)
-                            
-                    placed = True
-                    break
+                        # 移除旧空间
+                        spaces.pop(i)
 
-        if not placed:
-            pass
+                        # 添加新空间并过滤无效空间
+                        for ns in newSpaces:
+                            if ns.L > 0 and ns.W > 0 and ns.H > 0:
+                                spaces.append(ns)
+
+                        # 尝试合并空间以减少碎片化
+                        if len(spaces) > 10:
+                            spaces = mergeSpaces(spaces)
+
+                        # 重新排序空间以保证 FFD 效果
+                        spaces.sort(key=spaceSortKey)
+
+                        placed = True
+                        break # 跳出 rotation 循环
+
+            if placed:
+                break # 跳出 space 循环
+
 
     solution.calculateRates(container)
     return solution
