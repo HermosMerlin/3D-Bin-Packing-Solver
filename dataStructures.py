@@ -1,50 +1,53 @@
+from typing import List, Tuple
+
 class Item:
-    def __init__(self, id, l, w, h, weight):
-        self.id = id
-        self.l = l
-        self.w = w
-        self.h = h
-        self.weight = weight
-        self.volume = l * w * h
-        self.rotation = 0
+    def __init__(self, id: int, l: float, w: float, h: float, weight: float):
+        self.id: int = id
+        self.l: float = l
+        self.w: float = w
+        self.h: float = h
+        self.weight: float = weight
+        self.volume: float = l * w * h
+        self.rotation: int = 0
 
 class Container:
-    def __init__(self, L, W, H, maxWeight):
-        self.L = L
-        self.W = W
-        self.H = H
-        self.maxWeight = maxWeight
-        self.volume = L * W * H
+    def __init__(self, L: float, W: float, H: float, maxWeight: float):
+        self.L: float = L
+        self.W: float = W
+        self.H: float = H
+        self.maxWeight: float = maxWeight
+        self.volume: float = L * W * H
 
 class PackingSolution:
     def __init__(self):
-        self.placedItems = []
-        self.totalVolume = 0
-        self.totalWeight = 0
-        self.volumeRate = 0.0
-        self.weightRate = 0.0
+        # 存储格式: (itemId, x, y, z, rotation)
+        self.placedItems: List[Tuple[int, float, float, float, int]] = []
+        self.totalVolume: float = 0.0
+        self.totalWeight: float = 0.0
+        self.volumeRate: float = 0.0
+        self.weightRate: float = 0.0
 
-    def addItem(self, item, x, y, z, rotation):
+    def addItem(self, item: Item, x: float, y: float, z: float, rotation: int) -> None:
         self.placedItems.append((item.id, x, y, z, rotation))
         self.totalVolume += item.volume
         self.totalWeight += item.weight
 
-    def calculateRates(self, container):
+    def calculateRates(self, container: Container) -> Tuple[float, float]:
         self.volumeRate = self.totalVolume / container.volume
         self.weightRate = self.totalWeight / container.maxWeight
         return self.volumeRate, self.weightRate
 
-    def isFeasible(self, container):
+    def isFeasible(self, container: Container) -> bool:
         return self.totalWeight <= container.maxWeight
 
 class Space:
-    def __init__(self, x, y, z, L, W, H):
-        self.x = x
-        self.y = y
-        self.z = z
-        self.L = L
-        self.W = W
-        self.H = H
+    def __init__(self, x: float, y: float, z: float, L: float, W: float, H: float):
+        self.x: float = x
+        self.y: float = y
+        self.z: float = z
+        self.L: float = L
+        self.W: float = W
+        self.H: float = H
 
-    def canFit(self, item):
+    def canFit(self, item: Item) -> bool:
         return item.l <= self.L and item.w <= self.W and item.h <= self.H

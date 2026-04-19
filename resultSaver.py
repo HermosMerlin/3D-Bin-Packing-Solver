@@ -1,20 +1,21 @@
 import os
 from datetime import datetime
+from typing import List, Dict, Any
+from logger import get_logger
+
+logger = get_logger("resultSaver")
 
 class ResultSaver:
-    def __init__(self, resultsDir="results", outputConfig=None):
-        self.resultsDir = resultsDir
-        self.outputConfig = outputConfig or {}
-        # 确保结果目录存在
+    def __init__(self, resultsDir: str = "results", outputConfig: Dict[str, Any] = None):
+        self.resultsDir: str = resultsDir
+        self.outputConfig: Dict[str, Any] = outputConfig or {}
         os.makedirs(self.resultsDir, exist_ok=True)
 
-    def saveResults(self, results, testName):
+    def saveResults(self, results: List[Dict[str, Any]], testName: str) -> str:
         """保存测试结果到文件"""
-        # 创建测试用例文件夹 - 确保路径正确
         testFolder = os.path.join(self.resultsDir, testName)
         os.makedirs(testFolder, exist_ok=True)
 
-        # 生成时间戳文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         resultFile = os.path.join(testFolder, f"results_{timestamp}.txt")
         absResultFile = os.path.abspath(resultFile)
@@ -25,16 +26,15 @@ class ResultSaver:
             f.write(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n\n")
 
-            totalExecutionTime = 0
+            totalExecutionTime = 0.0
 
             for result in results:
-                # 显示集装箱尺寸而不是对象
-                containerInfo = f"{result['container'].L}x{result['container'].W}x{result['container'].H}, 最大载重{result['container'].maxWeight}"
+                container = result['container']
+                containerInfo = f"{container.L}x{container.W}x{container.H}, 最大载重{container.maxWeight}"
 
                 f.write(f"组合 {result['testIndex']}/{result['totalTests']}\n")
                 f.write(f"集装箱尺寸: {containerInfo}\n")
 
-                # 输出货物规格信息
                 f.write("货物规格:\n")
                 totalItems = 0
                 for itemType in result['itemTypes']:
@@ -44,7 +44,6 @@ class ResultSaver:
                     f.write(f"重量{itemType['weight']}, 数量{count}\n")
                 f.write(f"货物总数: {totalItems}\n")
 
-                # 显示算法参数
                 algoParams = result['algorithmParams']
                 f.write(f"算法参数: 迭代次数={algoParams['iterations']}, ")
                 f.write(f"随机率={algoParams['randomRate']}, ")
@@ -57,16 +56,12 @@ class ResultSaver:
 
                 totalExecutionTime += result['executionTime']
 
-                # 文字化显示放置方案（带开关）
                 if self.outputConfig.get("showPlacementText", True) and self.outputConfig.get("saveDetailedLog", True):
-                    # 密集格式显示
                     f.write("放置方案(密集格式):\n")
                     placementData = []
-                    # 修复：solution是对象，不是字典
                     for itemId, x, y, z, rotation in result['solution'].placedItems:
                         placementData.append(f"{itemId}:({x},{y},{z},{rotation})")
 
-                    # 每行显示多个货物，用分号分隔
                     line = ""
                     for i, data in enumerate(placementData):
                         if len(line) + len(data) + 2 < 80:
@@ -79,7 +74,6 @@ class ResultSaver:
 
                 f.write("-" * 80 + "\n\n")
 
-            # 综合统计
             f.write("综合统计:\n")
             avgVolumeRate = sum(r['volumeRate'] for r in results) / len(results)
             avgWeightRate = sum(r['weightRate'] for r in results) / len(results)
@@ -91,5 +85,5 @@ class ResultSaver:
             f.write(f"总运行时间: {totalExecutionTime:.3f} 秒\n")
             f.write(f"平均运行时间: {avgExecutionTime:.3f} 秒\n")
 
-        print(f"测试用例 '{testName}' 的结果已保存到: {absResultFile}")
+        logger.info(f"测试用例 '{testName}' 的结果已保存到: {absResultFile}")
         return absResultFile
