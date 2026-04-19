@@ -1,25 +1,80 @@
 from typing import List
 from dataStructures import Item, Container, Space, PackingSolution
+import bisect
+
+def mergeSpaces(spaces: List[Space]) -> List[Space]:
+    """尝试合并相邻且可以合并的空间以减少碎片化"""
+    if len(spaces) <= 1:
+        return spaces
+        
+    merged = True
+    while merged:
+        merged = False
+        i = 0
+        while i < len(spaces):
+            j = i + 1
+            while j < len(spaces):
+                s1 = spaces[i]
+                s2 = spaces[j]
+                newSpace = None
+                
+                # 检查在 X 轴方向是否可以合并
+                if s1.y == s2.y and s1.z == s2.z and s1.W == s2.W and s1.H == s2.H:
+                    if s1.x + s1.L == s2.x:
+                        newSpace = Space(s1.x, s1.y, s1.z, s1.L + s2.L, s1.W, s1.H)
+                    elif s2.x + s2.L == s1.x:
+                        newSpace = Space(s2.x, s1.y, s1.z, s1.L + s2.L, s1.W, s1.H)
+                
+                # 检查在 Y 轴方向是否可以合并
+                if not newSpace and s1.x == s2.x and s1.z == s2.z and s1.L == s2.L and s1.H == s2.H:
+                    if s1.y + s1.W == s2.y:
+                        newSpace = Space(s1.x, s1.y, s1.z, s1.L, s1.W + s2.W, s1.H)
+                    elif s2.y + s2.W == s1.y:
+                        newSpace = Space(s1.x, s2.y, s1.z, s1.L, s1.W + s2.W, s1.H)
+                        
+                # 检查在 Z 轴方向是否可以合并
+                if not newSpace and s1.x == s2.x and s1.y == s2.y and s1.L == s2.L and s1.W == s2.W:
+                    if s1.z + s1.H == s2.z:
+                        newSpace = Space(s1.x, s1.y, s1.z, s1.L, s1.W, s1.H + s2.H)
+                    elif s2.z + s2.H == s1.z:
+                        newSpace = Space(s1.x, s1.y, s2.z, s1.L, s1.W, s1.H + s2.H)
+                
+                if newSpace:
+                    spaces.pop(j)
+                    spaces.pop(i)
+                    spaces.append(newSpace)
+                    merged = True
+                    # 回到内层循环起始，因为列表已变
+                    break
+                j += 1
+            if merged:
+                break
+            i += 1
+    return spaces
 
 def simplePacking(container: Container, items: List[Item]) -> PackingSolution:
+    # 初始空间：整个容器
     spaces: List[Space] = [Space(0, 0, 0, container.L, container.W, container.H)]
     solution: PackingSolution = PackingSolution()
 
-    # 按体积降序排列货物
-    itemsSorted = sorted(items, key=lambda x: x.volume, reverse=True)
+    # 直接使用传入的货物顺序
+    itemsToPlace = items
 
-    for item in itemsSorted:
+    # 排序键：优先低处 (z), 其次后处 (y), 最后左侧 (x)
+    def spaceSortKey(s: Space):
+        return (s.z, s.y, s.x)
+
+    for item in itemsToPlace:
         placed = False
-        # 排序空间以便更好的利用（先考虑低处、后处、左侧的空间）
-        spaces.sort(key=lambda s: (-s.z, s.y, s.x))
-
-        for space in spaces:
+        
+        # 查找第一个能放下该货物的空间
+        for i, space in enumerate(spaces):
             if space.canFit(item):
                 # 检查载重限制
                 if solution.totalWeight + item.weight <= container.maxWeight:
                     solution.addItem(item, space.x, space.y, space.z, item.rotation)
 
-                    # 分解剩余空间
+                    # 分解剩余空间 (Guillotine 切割)
                     newSpaces = [
                         Space(space.x + item.l, space.y, space.z,
                               space.L - item.l, space.W, space.H),
@@ -29,8 +84,23 @@ def simplePacking(container: Container, items: List[Item]) -> PackingSolution:
                               item.l, item.w, space.H - item.h)
                     ]
 
-                    spaces.remove(space)
-                    spaces.extend(newSpaces)
+                    # 移除旧空间
+                    spaces.pop(i)
+                    
+                    # 添加新空间并过滤无效空间
+                    for ns in newSpaces:
+                        if ns.L > 0 and ns.W > 0 and ns.H > 0:
+                            spaces.append(ns)
+                    
+                    # 尝试合并空间以减少碎片化
+                    # 注意：频繁合并会降低速度，但能提高空间利用率
+                    # 这里采取每放置 5 个货物合并一次的折中方案，或者在空间较多时合并
+                    if len(spaces) > 10:
+                        spaces = mergeSpaces(spaces)
+                    
+                    # 重新排序空间以保证 FFD 效果
+                    spaces.sort(key=spaceSortKey)
+                            
                     placed = True
                     break
 

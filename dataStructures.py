@@ -37,6 +37,25 @@ class PackingSolution:
         self.weightRate = self.totalWeight / container.maxWeight
         return self.volumeRate, self.weightRate
 
+    def to_dict(self) -> dict:
+        return {
+            "placedItems": self.placedItems,
+            "totalVolume": self.totalVolume,
+            "totalWeight": self.totalWeight,
+            "volumeRate": self.volumeRate,
+            "weightRate": self.weightRate
+        }
+
+    @staticmethod
+    def from_dict(data: dict) -> 'PackingSolution':
+        sol = PackingSolution()
+        sol.placedItems = [tuple(item) if isinstance(item, list) else item for item in data["placedItems"]]
+        sol.totalVolume = data["totalVolume"]
+        sol.totalWeight = data["totalWeight"]
+        sol.volumeRate = data["volumeRate"]
+        sol.weightRate = data["weightRate"]
+        return sol
+
     def isFeasible(self, container: Container) -> bool:
         return self.totalWeight <= container.maxWeight
 
