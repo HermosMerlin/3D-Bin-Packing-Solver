@@ -1,23 +1,18 @@
 import random
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Callable
 from packingLogic import simplePacking
 from dataStructures import Item, Container, PackingSolution
 
-def optimizePacking(
+def hillClimbing(
     container: Container, 
     items: List[Item], 
-    iterations: int = 100, 
-    randomRate: float = 0.2, 
-    seed: Optional[int] = None
+    params: Dict[str, Any]
 ) -> PackingSolution:
     """
-    优化装箱方案
-    :param randomRate: 随机率（接受较差解的概率，用于扩展）
-    :param seed: 随机种子，用于复现结果
+    随机爬山算法（原方案逻辑）
     """
-    if seed is not None:
-        random.seed(seed)
-
+    iterations = params.get("iterations", 100)
+    
     # 初始序列：按体积降序
     currentItems: List[Item] = sorted(items, key=lambda x: x.volume, reverse=True)
     bestSolution: PackingSolution = simplePacking(container, currentItems)
@@ -39,3 +34,30 @@ def optimizePacking(
             currentItems = newItems
 
     return bestSolution
+
+# 算法注册表
+ALGORITHMS: Dict[str, Callable] = {
+    "hill_climbing": hillClimbing
+}
+
+def optimizePacking(
+    container: Container, 
+    items: List[Item], 
+    algorithmType: str = "hill_climbing",
+    params: Optional[Dict[str, Any]] = None,
+    seed: Optional[int] = None
+) -> PackingSolution:
+    """
+    优化算法统一入口（策略模式）
+    """
+    if seed is not None:
+        random.seed(seed)
+
+    if params is None:
+        params = {}
+
+    alg_func = ALGORITHMS.get(algorithmType)
+    if not alg_func:
+        raise ValueError(f"未知的算法类型: {algorithmType}")
+
+    return alg_func(container, items, params)

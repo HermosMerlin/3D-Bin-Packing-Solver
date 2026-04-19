@@ -1,5 +1,6 @@
 {
     "algorithmDefaults": {
+        "algorithmType": "hill_climbing",
         "iterations": {
             "min": 10,
             "max": 10,

@@ -89,46 +89,55 @@ class TestCaseManager:
         """生成参数组合列表"""
         combinations: List[Dict[str, Any]] = []
 
+        # 处理算法类型
+        algorithmTypes = paramConfig.get("algorithmType", "hill_climbing")
+        if not isinstance(algorithmTypes, list):
+            algorithmTypes = [algorithmTypes]
+
         # 处理迭代次数
         if isinstance(paramConfig.get("iterations"), dict):
             iterConfig = paramConfig["iterations"]
-            minVal = iterConfig.get("min", 50)
-            maxVal = iterConfig.get("max", 150)
+            minVal = iterConfig.get("min", 10)
+            maxVal = iterConfig.get("max", 10)
             step = iterConfig.get("step", 50)
             iterationsList = list(range(minVal, maxVal + 1, step))
+            if not iterationsList: iterationsList = [minVal]
         else:
-            iterationsList = [paramConfig.get("iterations", 100)]
+            iterationsList = [paramConfig.get("iterations", 10)]
 
         # 处理随机率
         if isinstance(paramConfig.get("randomRate"), dict):
             rateConfig = paramConfig["randomRate"]
             minVal = rateConfig.get("min", 0.1)
-            maxVal = rateConfig.get("max", 0.3)
+            maxVal = rateConfig.get("max", 0.1)
             step = rateConfig.get("step", 0.1)
             current = minVal
             randomRates = []
             while current <= maxVal + 1e-9:
                 randomRates.append(round(current, 2))
                 current += step
+            if not randomRates: randomRates = [minVal]
         else:
-            randomRates = [paramConfig.get("randomRate", 0.2)]
+            randomRates = [paramConfig.get("randomRate", 0.1)]
 
         useTimeSeed = paramConfig.get("useTimeSeed", True)
 
-        for iterVal in iterationsList:
-            for rateVal in randomRates:
-                combinations.append({
-                    "iterations": iterVal,
-                    "randomRate": rateVal,
-                    "useTimeSeed": useTimeSeed
-                })
+        for algType in algorithmTypes:
+            for iterVal in iterationsList:
+                for rateVal in randomRates:
+                    combinations.append({
+                        "algorithmType": algType,
+                        "iterations": iterVal,
+                        "randomRate": rateVal,
+                        "useTimeSeed": useTimeSeed
+                    })
 
         return combinations
 
     def getEffectiveParams(self, testCaseParams: Dict[str, Any], defaultParams: Dict[str, Any]) -> Dict[str, Any]:
         """获取有效参数"""
         effectiveParams: Dict[str, Any] = {}
-        for key in ["iterations", "randomRate", "useTimeSeed"]:
+        for key in ["algorithmType", "iterations", "randomRate", "useTimeSeed"]:
             if key in testCaseParams:
                 effectiveParams[key] = testCaseParams[key]
             elif key in defaultParams:
