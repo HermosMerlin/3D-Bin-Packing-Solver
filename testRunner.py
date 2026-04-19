@@ -46,10 +46,17 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
     """运行单个测试用例，并支持结果缓存"""
     
     # 获取算法参数
+    algorithmType = paramCombination.get("algorithmType", "hill_climbing")
     iterations = paramCombination["iterations"]
     randomRate = paramCombination["randomRate"]
     useTimeSeed = paramCombination["useTimeSeed"]
     seed = generateTimeSeed() if useTimeSeed else 42
+
+    # 算法特定的参数字典
+    params = {
+        "iterations": iterations,
+        "randomRate": randomRate
+    }
 
     # 准备缓存标识（哈希）
     outputConfig = config.get("output", {})
@@ -59,8 +66,8 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
     # 输入要素：测试用例定义 + 关键算法参数
     inputData = {
         "testCase": testCase,
-        "iterations": iterations,
-        "randomRate": randomRate,
+        "algorithmType": algorithmType,
+        "params": params,
         "seed": seed
     }
     inputHash = get_hash(inputData)
@@ -98,6 +105,7 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
                     "weightRate": solution.weightRate,
                     "placedCount": len(solution.placedItems),
                     "algorithmParams": {
+                        "algorithmType": algorithmType,
                         "iterations": iterations,
                         "randomRate": randomRate,
                         "seed": seed,
@@ -123,7 +131,7 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
     items = generateItemsFromTypes(testCase["itemTypes"])
 
     solution: PackingSolution = optimizePacking(
-        container, items, iterations=iterations, randomRate=randomRate, seed=seed
+        container, items, algorithmType=algorithmType, params=params, seed=seed
     )
 
     endTime = time.time()
