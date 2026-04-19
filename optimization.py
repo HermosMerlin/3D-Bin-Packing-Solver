@@ -35,18 +35,78 @@ def greedySearch(
 
     return bestSolution
 
+import math
+
 def simulatedAnnealing(
     container: Container, 
     items: List[Item], 
     params: Dict[str, Any]
 ) -> PackingSolution:
     """
-    模拟退火算法 (Simulated Annealing) - 占位实现
+    模拟退火算法 (Simulated Annealing)
+    通过允许以一定概率接受较差解，尝试跳出局部最优。
     """
-    # 暂时重用 greedySearch 的逻辑，但参数略有不同以示区分
-    new_params = params.copy()
-    new_params["iterations"] = params.get("iterations", 10) // 2
-    return greedySearch(container, items, new_params)
+    # 1. 初始化参数
+    # 迭代总数建议在 100-500 之间以平衡时间与效果
+    max_iterations = params.get("iterations", 50)
+    # 初始温度建议 100.0
+    initial_temp = params.get("initialTemp", 100.0)
+    # 冷却率建议 0.9 - 0.99
+    cooling_rate = params.get("coolingRate", 0.95)
+    # 终止温度
+    min_temp = params.get("minTemp", 0.01)
+
+    # 2. 初始化状态
+    # 初始序列：按体积降序
+    current_items = sorted(items, key=lambda x: x.volume, reverse=True)
+    current_solution = simplePacking(container, current_items)
+    
+    best_solution = current_solution
+    best_items = current_items
+    
+    current_temp = initial_temp
+    
+    # 为了让 iterations 参数在退火中也有意义，我们将 iterations 作为退火的主循环步数
+    for iteration in range(max_iterations):
+        if current_temp < min_temp:
+            break
+            
+        # 3. 产生邻域解（随机扰动：交换两个位置）
+        new_items = current_items.copy()
+        idx1, idx2 = random.sample(range(len(new_items)), 2)
+        new_items[idx1], new_items[idx2] = new_items[idx2], new_items[idx1]
+        
+        # 4. 评估新解
+        new_solution = simplePacking(container, new_items)
+        
+        # 计算能量差 (我们要最大化 volumeRate，所以能量 E = -volumeRate)
+        # delta_e = new_energy - current_energy
+        delta_e = current_solution.volumeRate - new_solution.volumeRate
+        
+        # 5. 接受准则 (Metropolis)
+        # 如果新解更好，或者以一定概率接受较差解
+        if delta_e < 0:
+            # 找到更好的解，接受！
+            current_solution = new_solution
+            current_items = new_items
+            
+            # 更新全局最优
+            if new_solution.volumeRate > best_solution.volumeRate:
+                best_solution = new_solution
+                best_items = new_items
+        else:
+            # 这是一个较差的解，计算接受概率
+            # 概率 P = exp(-delta_e / T)，注意 delta_e 这里是正值
+            # 为了防止数值溢出，delta_e 需要映射到一个合理的范围
+            acceptance_prob = math.exp(-delta_e * 100 / current_temp)
+            if random.random() < acceptance_prob:
+                current_solution = new_solution
+                current_items = new_items
+        
+        # 6. 降温
+        current_temp *= cooling_rate
+
+    return best_solution
 
 # 算法注册表
 ALGORITHMS: Dict[str, Callable] = {
