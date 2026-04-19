@@ -1,5 +1,8 @@
 import time
 import random
+import hashlib
+import json
+import os
 from typing import List, Dict, Any, Tuple
 from dataStructures import Item, Container, PackingSolution
 from optimization import optimizePacking
@@ -34,9 +37,79 @@ def generateItemsFromTypes(itemTypes: List[Dict[str, Any]]) -> List[Item]:
 
     return items
 
+def get_hash(data: Any) -> str:
+    """计算数据的 SHA256 哈希"""
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
 def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any], 
                   paramCombination: Dict[str, Any], testIndex: int, totalTests: int) -> Dict[str, Any]:
-    """运行单个测试用例"""
+    """运行单个测试用例，并支持结果缓存"""
+    
+    # 获取算法参数
+    iterations = paramCombination["iterations"]
+    randomRate = paramCombination["randomRate"]
+    useTimeSeed = paramCombination["useTimeSeed"]
+    seed = generateTimeSeed() if useTimeSeed else 42
+
+    # 准备缓存标识（哈希）
+    outputConfig = config.get("output", {})
+    enableCache = outputConfig.get("enableCache", False)
+    cacheDir = outputConfig.get("cacheDir", "cache")
+    
+    # 输入要素：测试用例定义 + 关键算法参数
+    inputData = {
+        "testCase": testCase,
+        "iterations": iterations,
+        "randomRate": randomRate,
+        "seed": seed
+    }
+    inputHash = get_hash(inputData)
+    cacheFile = os.path.join(cacheDir, f"{inputHash}.json")
+
+    # 尝试读取缓存
+    if enableCache:
+        if not os.path.exists(cacheDir):
+            os.makedirs(cacheDir, exist_ok=True)
+        
+        if os.path.exists(cacheFile):
+            try:
+                with open(cacheFile, 'r', encoding='utf-8') as f:
+                    cachedResult = json.load(f)
+                
+                logger.info(f"    (缓存命中: {inputHash[:8]}...)")
+                
+                # 重建 Container 和 Items（用于返回结果）
+                containerData = testCase["container"]
+                container = Container(L=containerData["L"], W=containerData["W"], H=containerData["H"], maxWeight=containerData["maxWeight"])
+                items = generateItemsFromTypes(testCase["itemTypes"])
+                
+                # 重建 Solution
+                solution = PackingSolution.from_dict(cachedResult["solution"])
+                
+                return {
+                    "testName": testCase["name"],
+                    "testIndex": testIndex,
+                    "totalTests": totalTests,
+                    "container": container,
+                    "items": items,
+                    "itemTypes": testCase["itemTypes"],
+                    "solution": solution,
+                    "volumeRate": solution.volumeRate,
+                    "weightRate": solution.weightRate,
+                    "placedCount": len(solution.placedItems),
+                    "algorithmParams": {
+                        "iterations": iterations,
+                        "randomRate": randomRate,
+                        "seed": seed,
+                        "useTimeSeed": useTimeSeed
+                    },
+                    "executionTime": cachedResult.get("executionTime", 0.0),
+                    "isCached": True
+                }
+            except Exception as e:
+                logger.warning(f"    (缓存读取失败: {e})")
+
+    # 如果没有缓存或禁用缓存，执行计算
     startTime = time.time()
 
     containerData = testCase["container"]
@@ -48,17 +121,27 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
     )
 
     items = generateItemsFromTypes(testCase["itemTypes"])
-    iterations = paramCombination["iterations"]
-    randomRate = paramCombination["randomRate"]
-    useTimeSeed = paramCombination["useTimeSeed"]
-
-    seed = generateTimeSeed() if useTimeSeed else 42
 
     solution: PackingSolution = optimizePacking(
         container, items, iterations=iterations, randomRate=randomRate, seed=seed
     )
 
     endTime = time.time()
+    executionTime = endTime - startTime
+
+    # 保存结果到缓存
+    if enableCache:
+        try:
+            cacheData = {
+                "solution": solution.to_dict(),
+                "executionTime": executionTime,
+                "inputHash": inputHash
+            }
+            with open(cacheFile, 'w', encoding='utf-8') as f:
+                json.dump(cacheData, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"    (缓存写入失败: {e})")
+
     return {
         "testName": testCase["name"],
         "testIndex": testIndex,
@@ -76,7 +159,8 @@ def runSingleTest(testCase: Dict[str, Any], config: Dict[str, Any],
             "seed": seed,
             "useTimeSeed": useTimeSeed
         },
-        "executionTime": endTime - startTime
+        "executionTime": executionTime,
+        "isCached": False
     }
 
 def runTestSuite(testCase: Dict[str, Any], config: Dict[str, Any], 
