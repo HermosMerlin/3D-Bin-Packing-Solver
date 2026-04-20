@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import lru_cache
 from typing import Any, Dict, List, Tuple
 from dataStructures import ProblemInstance, ShipmentPlan
@@ -22,6 +23,7 @@ CACHE_FINGERPRINT_FILES: Tuple[str, ...] = (
 )
 DEFAULT_CACHE_VERSION = 3
 DEFAULT_BASE_SEED = 42
+DEFAULT_MIN_TASKS_FOR_PARALLEL = 2
 
 def generateTimeSeed() -> int:
     timestamp = int(time.time() * 1000)
@@ -82,6 +84,53 @@ def _logValidationErrors(prefix: str, errors: List[str]) -> None:
         logger.warning(f"      - {error}")
     if len(errors) > 5:
         logger.warning(f"      - ... {len(errors) - 5} more")
+
+def _normalizePositiveInt(value: Any, fallback: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return normalized if normalized > 0 else fallback
+
+def _resolveParallelSettings(config: Dict[str, Any], totalRuns: int) -> Dict[str, Any]:
+    parallelConfig = config.get("execution", {}).get("parallel", {})
+    enabled = bool(parallelConfig.get("enabled", False))
+    minTasksForParallel = _normalizePositiveInt(
+        parallelConfig.get("minTasksForParallel", DEFAULT_MIN_TASKS_FOR_PARALLEL),
+        DEFAULT_MIN_TASKS_FOR_PARALLEL
+    )
+    try:
+        configuredMaxWorkers = int(parallelConfig.get("maxWorkers", 0) or 0)
+    except (TypeError, ValueError):
+        configuredMaxWorkers = 0
+    cpuCount = os.cpu_count() or 1
+    autoWorkers = max(1, cpuCount - 1) if cpuCount > 1 else 1
+    maxWorkers = configuredMaxWorkers if configuredMaxWorkers > 0 else autoWorkers
+    maxWorkers = max(1, min(maxWorkers, totalRuns))
+    shouldUseParallel = enabled and totalRuns >= minTasksForParallel and maxWorkers > 1
+    return {
+        "enabled": enabled,
+        "shouldUseParallel": shouldUseParallel,
+        "minTasksForParallel": minTasksForParallel,
+        "maxWorkers": maxWorkers,
+        "cpuCount": cpuCount
+    }
+
+def _formatRunTaskPrefix(task: Dict[str, Any]) -> str:
+    return (
+        f"run {task['runIndex']}/{task['totalRuns']} | "
+        f"组 {task['combinationIndex']}/{task['totalCombinations']} | "
+        f"重复 {task['repeatIndex']}/{task['repeatCount']}"
+    )
+
+def _logRunCompletion(result: Dict[str, Any]) -> None:
+    logger.info(
+        f"    完成 {_formatRunTaskPrefix(result)} | "
+        f"{result['algorithmParams']['algorithmType']} | "
+        f"目标={result['objectiveValue']:.6f} | "
+        f"耗时={result['executionTime']:.3f}s | "
+        f"{'VALID' if result['isValid'] else 'INVALID'}"
+    )
 
 def _buildResultPayload(
     problem: ProblemInstance,
@@ -174,6 +223,8 @@ def runSingleTest(
     outputConfig = config.get("output", {})
     enableCache = outputConfig.get("enableCache", False)
     cacheDir = outputConfig.get("cacheDir", "cache")
+    if not os.path.isabs(cacheDir):
+        cacheDir = os.path.join(_getProjectRoot(), cacheDir)
     inputData = {
         "testCase": testCase,
         "algorithmType": algorithmType,
@@ -264,6 +315,127 @@ def runSingleTest(
 
     return resultPayload
 
+def _buildRunTasks(
+    testCase: Dict[str, Any],
+    config: Dict[str, Any],
+    paramCombinations: List[Dict[str, Any]],
+    totalRuns: int
+) -> List[Dict[str, Any]]:
+    tasks: List[Dict[str, Any]] = []
+    currentRunIndex = 0
+    totalCombinations = len(paramCombinations)
+
+    for combinationIndex, paramCombination in enumerate(paramCombinations, start=1):
+        algorithmType = paramCombination["algorithmType"]
+        paramSummary = formatAlgorithmParams(
+            algorithmType,
+            paramCombination.get("params", {})
+        )
+        repeatCount = max(1, int(paramCombination.get("repeatCount", 1)))
+        useTimeSeed = bool(paramCombination.get("useTimeSeed", False))
+        baseSeed = paramCombination.get("baseSeed", DEFAULT_BASE_SEED)
+        if useTimeSeed:
+            seedMode = "time"
+        elif repeatCount == 1:
+            seedMode = f"fixed({baseSeed})"
+        else:
+            seedMode = f"fixed({baseSeed}..{generateDeterministicSeed(baseSeed, repeatCount)})"
+
+        logger.info(
+            f"  参数组 {combinationIndex}/{totalCombinations} [{algorithmType}]: "
+            f"{paramSummary}; repeats={repeatCount}; seed={seedMode}"
+        )
+
+        for repeatIndex in range(1, repeatCount + 1):
+            currentRunIndex += 1
+            seedPreview = (
+                "time-based"
+                if useTimeSeed
+                else str(generateDeterministicSeed(baseSeed, repeatIndex))
+            )
+            task = {
+                "testCase": testCase,
+                "config": config,
+                "paramCombination": paramCombination,
+                "combinationIndex": combinationIndex,
+                "totalCombinations": totalCombinations,
+                "repeatIndex": repeatIndex,
+                "repeatCount": repeatCount,
+                "runIndex": currentRunIndex,
+                "totalRuns": totalRuns,
+                "seedPreview": seedPreview
+            }
+            logger.info(
+                f"    排队 {_formatRunTaskPrefix(task)}; seed={seedPreview}"
+            )
+            tasks.append(task)
+
+    return tasks
+
+def _runSingleTestTask(task: Dict[str, Any], cacheIdentity: Dict[str, Any]) -> Dict[str, Any]:
+    testCaseManager = TestCaseManager(testPath=_getProjectRoot())
+    return runSingleTest(
+        testCase=task["testCase"],
+        config=task["config"],
+        paramCombination=task["paramCombination"],
+        combinationIndex=task["combinationIndex"],
+        totalCombinations=task["totalCombinations"],
+        repeatIndex=task["repeatIndex"],
+        repeatCount=task["repeatCount"],
+        runIndex=task["runIndex"],
+        totalRuns=task["totalRuns"],
+        cacheIdentity=cacheIdentity,
+        testCaseManager=testCaseManager
+    )
+
+def _runTasksSerial(
+    tasks: List[Dict[str, Any]],
+    cacheIdentity: Dict[str, Any],
+    testCaseManager: TestCaseManager
+) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for task in tasks:
+        logger.info(f"    开始 {_formatRunTaskPrefix(task)}")
+        result = runSingleTest(
+            testCase=task["testCase"],
+            config=task["config"],
+            paramCombination=task["paramCombination"],
+            combinationIndex=task["combinationIndex"],
+            totalCombinations=task["totalCombinations"],
+            repeatIndex=task["repeatIndex"],
+            repeatCount=task["repeatCount"],
+            runIndex=task["runIndex"],
+            totalRuns=task["totalRuns"],
+            cacheIdentity=cacheIdentity,
+            testCaseManager=testCaseManager
+        )
+        _logRunCompletion(result)
+        results.append(result)
+    return results
+
+def _runTasksParallel(
+    tasks: List[Dict[str, Any]],
+    cacheIdentity: Dict[str, Any],
+    maxWorkers: int
+) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    with ProcessPoolExecutor(max_workers=maxWorkers) as executor:
+        futures = {
+            executor.submit(_runSingleTestTask, task, cacheIdentity): task
+            for task in tasks
+        }
+        for future in as_completed(futures):
+            task = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"并行任务失败: {_formatRunTaskPrefix(task)}"
+                ) from exc
+            _logRunCompletion(result)
+            results.append(result)
+    return results
+
 def runTestSuite(
     testCase: Dict[str, Any],
     config: Dict[str, Any],
@@ -285,53 +457,27 @@ def runTestSuite(
     logger.info(f"\n测试用例: {testCaseName}")
     logger.info(f"参数组数: {len(paramCombinations)}")
     logger.info(f"总运行次数: {totalRuns}")
+    parallelSettings = _resolveParallelSettings(config, totalRuns)
+    logger.info(
+        "运行调度: "
+        f"{'parallel' if parallelSettings['shouldUseParallel'] else 'serial'} | "
+        f"workers={parallelSettings['maxWorkers']} | "
+        f"cpu={parallelSettings['cpuCount']}"
+    )
 
-    results: List[Dict[str, Any]] = []
-    currentRunIndex = 0
-    for combinationIndex, paramCombination in enumerate(paramCombinations, start=1):
-        algorithmType = paramCombination["algorithmType"]
-        paramSummary = formatAlgorithmParams(
-            algorithmType,
-            paramCombination.get("params", {})
+    tasks = _buildRunTasks(testCase, config, paramCombinations, totalRuns)
+    if parallelSettings["shouldUseParallel"]:
+        results = _runTasksParallel(
+            tasks=tasks,
+            cacheIdentity=cacheIdentity,
+            maxWorkers=parallelSettings["maxWorkers"]
         )
-        repeatCount = max(1, int(paramCombination.get("repeatCount", 1)))
-        useTimeSeed = bool(paramCombination.get("useTimeSeed", False))
-        baseSeed = paramCombination.get("baseSeed", DEFAULT_BASE_SEED)
-        if useTimeSeed:
-            seedMode = "time"
-        elif repeatCount == 1:
-            seedMode = f"fixed({baseSeed})"
-        else:
-            seedMode = f"fixed({baseSeed}..{generateDeterministicSeed(baseSeed, repeatCount)})"
-
-        logger.info(
-            f"  参数组 {combinationIndex}/{len(paramCombinations)} [{algorithmType}]: "
-            f"{paramSummary}; repeats={repeatCount}; seed={seedMode}"
+    else:
+        results = _runTasksSerial(
+            tasks=tasks,
+            cacheIdentity=cacheIdentity,
+            testCaseManager=testCaseManager
         )
 
-        for repeatIndex in range(1, repeatCount + 1):
-            currentRunIndex += 1
-            seedPreview = (
-                "time-based" if useTimeSeed
-                else str(generateDeterministicSeed(baseSeed, repeatIndex))
-            )
-            logger.info(
-                f"    重复 {repeatIndex}/{repeatCount} -> "
-                f"run {currentRunIndex}/{totalRuns}; seed={seedPreview}"
-            )
-            result = runSingleTest(
-                testCase=testCase,
-                config=config,
-                paramCombination=paramCombination,
-                combinationIndex=combinationIndex,
-                totalCombinations=len(paramCombinations),
-                repeatIndex=repeatIndex,
-                repeatCount=repeatCount,
-                runIndex=currentRunIndex,
-                totalRuns=totalRuns,
-                cacheIdentity=cacheIdentity,
-                testCaseManager=testCaseManager
-            )
-            results.append(result)
-
+    results.sort(key=lambda result: result["runIndex"])
     return results, testCaseName

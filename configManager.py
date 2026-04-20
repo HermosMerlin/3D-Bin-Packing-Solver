@@ -24,6 +24,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "repeatCount": 1
         }
     },
+    "execution": {
+        "parallel": {
+            "enabled": True,
+            "maxWorkers": 0,
+            "minTasksForParallel": 2
+        }
+    },
     "validation": {
         "enableValidationSuite": False,
         "runBeforeBatch": False,
@@ -68,6 +75,14 @@ class ConfigManager:
             merged["algorithmDefaults"] = loaded.get(
                 "algorithmDefaults",
                 copy.deepcopy(DEFAULT_CONFIG["algorithmDefaults"])
+            )
+            merged["execution"] = copy.deepcopy(DEFAULT_CONFIG["execution"])
+            merged["execution"].update(loaded.get("execution", {}))
+            merged["execution"]["parallel"] = copy.deepcopy(
+                DEFAULT_CONFIG["execution"]["parallel"]
+            )
+            merged["execution"]["parallel"].update(
+                loaded.get("execution", {}).get("parallel", {})
             )
             merged["validation"] = dict(DEFAULT_CONFIG["validation"])
             merged["validation"].update(loaded.get("validation", {}))

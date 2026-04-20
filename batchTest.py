@@ -68,6 +68,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--algorithm", help="只运行指定算法")
     parser.add_argument("--iterations", type=int, help="覆盖算法迭代次数")
     parser.add_argument("--repeat", type=int, help="覆盖重复次数")
+    parser.add_argument("--parallel", action="store_true", help="强制开启参数组/重复组并行")
+    parser.add_argument("--serial", action="store_true", help="强制关闭并行，使用串行调度")
+    parser.add_argument("--workers", type=int, help="覆盖并行 worker 数，0 表示自动")
     parser.add_argument("--no-viz", action="store_true", help="关闭可视化")
     parser.add_argument("--no-cache", action="store_true", help="关闭缓存")
     parser.add_argument("--output-tag", help="结果目录追加标签")
@@ -136,10 +139,18 @@ def _apply_runtime_overrides(
     args: argparse.Namespace
 ) -> Dict[str, Any]:
     overridden = copy.deepcopy(config)
+    overridden.setdefault("execution", {})
+    overridden["execution"].setdefault("parallel", {})
     if args.no_viz:
         overridden["output"]["enableVisualization"] = False
     if args.no_cache:
         overridden["output"]["enableCache"] = False
+    if args.parallel:
+        overridden["execution"]["parallel"]["enabled"] = True
+    if args.serial:
+        overridden["execution"]["parallel"]["enabled"] = False
+    if args.workers is not None:
+        overridden["execution"]["parallel"]["maxWorkers"] = args.workers
 
     if args.algorithm:
         selectedAlgorithm = args.algorithm
@@ -252,6 +263,7 @@ def main() -> None:
     outputConfig = config.get("output", outputConfig)
     cacheIdentity = buildCacheIdentity(config)
     loggingConfig = outputConfig.get("logging", {})
+    parallelConfig = config.get("execution", {}).get("parallel", {})
 
     topLevelDir = _build_output_root(scriptDir, config, args)
     os.makedirs(topLevelDir, exist_ok=True)
@@ -276,6 +288,12 @@ def main() -> None:
             f"缓存版本: {cacheIdentity['cacheVersion']}, "
             f"代码指纹: {cacheIdentity['codeFingerprint'][:12]}"
         )
+    logger.info(
+        "并行调度: "
+        f"enabled={parallelConfig.get('enabled', False)}, "
+        f"maxWorkers={parallelConfig.get('maxWorkers', 0)}, "
+        f"minTasksForParallel={parallelConfig.get('minTasksForParallel', 2)}"
+    )
 
     validationSummary = None
     validationConfig = config.get("validation", {})
@@ -384,6 +402,7 @@ def main() -> None:
         "caseCount": len(testCases),
         "cases": [testCase["name"] for testCase in testCases],
         "runtimeArgs": vars(args),
+        "parallelExecution": parallelConfig,
         "validation": validationSummary,
         "totalCombinationCount": totalCombinationCount,
         "totalRunCount": totalRunCount,

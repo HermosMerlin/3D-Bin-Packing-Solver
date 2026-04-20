@@ -24,6 +24,13 @@
       "repeatCount": 1
     }
   },
+  "execution": {
+    "parallel": {
+      "enabled": true,
+      "maxWorkers": 0,
+      "minTasksForParallel": 2
+    }
+  },
   "validation": {
     "enableValidationSuite": false,
     "runBeforeBatch": false,
