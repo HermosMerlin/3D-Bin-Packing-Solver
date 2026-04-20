@@ -1,40 +1,58 @@
 {
-    "algorithmDefaults": {
-        "greedy_search": {
-            "iterations": {
-                "min": 100,
-                "max": 200,
-                "step": 50
-            },
-            "useTimeSeed": true
-        },
-        "simulated_annealing": {
-            "iterations": {
-                "min": 100,
-                "max": 200,
-                "step": 50
-            },
-            "initialTemp": 100.0,
-            "coolingRate": 0.98,
-            "minTemp": 0.01,
-            "useTimeSeed": true
-        }
+  "algorithmDefaults": {
+    "greedy_search": {
+      "iterations": {
+        "min": 20,
+        "max": 40,
+        "step": 20
+      },
+      "useTimeSeed": false,
+      "baseSeed": 42,
+      "repeatCount": 1
     },
-    "output": {
-        "resultsDir": "results",
-        "cacheDir": "cache",
-        "enableCache": true,
-        "cacheVersion": 1,
-        "saveSolutionText": "only-best",
-        "saveDetailedLog": false,
-        "showPlacementText": false,
-        "enableVisualization": true,
-        "saveStaticImage": false,
-        "visualizeBestPerAlgorithmOnly": true,
-        "logging": {
-            "consoleLevel": "INFO",
-            "fileLevel": "DEBUG",
-            "saveToFile": true
-        }
+    "simulated_annealing": {
+      "iterations": {
+        "min": 20,
+        "max": 40,
+        "step": 20
+      },
+      "initialTemp": 50.0,
+      "coolingRate": 0.95,
+      "minTemp": 0.1,
+      "useTimeSeed": false,
+      "baseSeed": 42,
+      "repeatCount": 1
     }
+  },
+  "output": {
+    "resultsDir": "results",
+    "cacheDir": "cache",
+    "enableCache": true,
+    "cacheVersion": 3,
+    "exportSummaryData": true,
+    "saveSolutionText": "only-best",
+    "saveDetailedLog": false,
+    "showPlacementText": false,
+    "enableVisualization": true,
+    "saveStaticImage": false,
+    "analysisCharts": [
+      {
+        "level": "group",
+        "x": "containerAspectRatio",
+        "y": "avgFillRate",
+        "title": "Container Aspect Ratio vs Avg Fill Rate"
+      },
+      {
+        "level": "group",
+        "x": "itemTypeCount",
+        "y": "avgFillRate",
+        "title": "Item Type Count vs Avg Fill Rate"
+      }
+    ],
+    "logging": {
+      "consoleLevel": "INFO",
+      "fileLevel": "DEBUG",
+      "saveToFile": true
+    }
+  }
 }

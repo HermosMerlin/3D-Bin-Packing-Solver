@@ -1,196 +1,254 @@
 import os
 import traceback
-from typing import List, Tuple, Dict, Any, Optional, Set
-import numpy as np
+from typing import Any, Dict, List, Optional, Tuple
 import plotly.graph_objects as go
 from logger import get_logger
-from dataStructures import Item, PackingSolution
 
 logger = get_logger("visualizer")
 
 class Visualizer:
     def __init__(self, resultsDir: str = "results", outputConfig: Dict[str, Any] = None):
-        self.resultsDir: str = resultsDir
-        self.outputConfig: Dict[str, Any] = outputConfig or {}
+        self.resultsDir = resultsDir
+        self.outputConfig = outputConfig or {}
         os.makedirs(self.resultsDir, exist_ok=True)
 
     @staticmethod
-    def _box_mesh(x: float, y: float, z: float, dx: float, dy: float, dz: float, 
-                  color: str, opacity: float = 1.0, hovertext: str = "") -> go.Mesh3d:
-        """使用 Mesh3d 创建立方体，保持不透明材质"""
+    def _box_mesh(
+        x: float,
+        y: float,
+        z: float,
+        dx: float,
+        dy: float,
+        dz: float,
+        color: str,
+        hovertext: str = ""
+    ) -> go.Mesh3d:
         return go.Mesh3d(
-            x=[x, x, x+dx, x+dx, x, x, x+dx, x+dx],
-            y=[y, y+dy, y+dy, y, y, y+dy, y+dy, y],
-            z=[z, z, z, z, z+dz, z+dz, z+dz, z+dz],
+            x=[x, x, x + dx, x + dx, x, x, x + dx, x + dx],
+            y=[y, y + dy, y + dy, y, y, y + dy, y + dy, y],
+            z=[z, z, z, z, z + dz, z + dz, z + dz, z + dz],
             i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
             j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
             k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
             color=color,
-            opacity=opacity,
+            opacity=1.0,
             flatshading=True,
-            # 均衡的光照设置，确保立体感的同时面与面有区分
-            lighting=dict(ambient=0.5, diffuse=0.8, specular=0.1, roughness=0.5, fresnel=0.2),
-            lightposition=dict(x=100, y=200, z=150),
-            hoverinfo='text',
+            lighting=dict(ambient=0.5, diffuse=0.8, specular=0.1, roughness=0.5),
+            hoverinfo="text",
             text=hovertext,
             showlegend=False
         )
 
     @staticmethod
-    def _box_wireframe(x: float, y: float, z: float, dx: float, dy: float, dz: float, 
-                       color: str = 'rgb(30,30,30)', width: int = 5) -> go.Scatter3d:
-        """适中厚度的轮廓线 (width=5) 并使用深灰色，平衡可见度与美观"""
-        pts = [
-            (x,y,z),(x+dx,y,z),(x+dx,y+dy,z),(x,y+dy,z),(x,y,z),
-            (x,y,z+dz),(x+dx,y,z+dz),(x+dx,y+dy,z+dz),(x,y+dy,z+dz),(x,y,z+dz),
-            (None,None,None),
-            (x,y,z),(x,y,z+dz),(None,None,None),
-            (x+dx,y,z),(x+dx,y,z+dz),(None,None,None),
-            (x+dx,y+dy,z),(x+dx,y+dy,z+dz),(None,None,None),
-            (x,y+dy,z),(x,y+dy,z+dz)
+    def _box_wireframe(
+        x: float,
+        y: float,
+        z: float,
+        dx: float,
+        dy: float,
+        dz: float,
+        color: str = "rgb(30,30,30)",
+        width: int = 4
+    ) -> go.Scatter3d:
+        points = [
+            (x, y, z), (x + dx, y, z), (x + dx, y + dy, z), (x, y + dy, z), (x, y, z),
+            (x, y, z + dz), (x + dx, y, z + dz), (x + dx, y + dy, z + dz), (x, y + dy, z + dz), (x, y, z + dz),
+            (None, None, None),
+            (x, y, z), (x, y, z + dz), (None, None, None),
+            (x + dx, y, z), (x + dx, y, z + dz), (None, None, None),
+            (x + dx, y + dy, z), (x + dx, y + dy, z + dz), (None, None, None),
+            (x, y + dy, z), (x, y + dy, z + dz)
         ]
-        wx, wy, wz = zip(*pts)
+        px, py, pz = zip(*points)
         return go.Scatter3d(
-            x=wx, y=wy, z=wz,
-            mode='lines',
+            x=px,
+            y=py,
+            z=pz,
+            mode="lines",
             line=dict(color=color, width=width),
-            hoverinfo='skip',
+            hoverinfo="skip",
             showlegend=False
         )
 
     @staticmethod
     def _container_wireframe(L: float, W: float, H: float) -> go.Scatter3d:
-        pts = [
-            (0,0,0),(L,0,0),(L,W,0),(0,W,0),(0,0,0),
-            (0,0,H),(L,0,H),(L,W,H),(0,W,H),(0,0,H),
-            (None,None,None),
-            (L,0,0),(L,0,H),(None,None,None),
-            (L,W,0),(L,W,H),(None,None,None),
-            (0,W,0),(0,W,H)
-        ]
-        wx, wy, wz = zip(*pts)
-        return go.Scatter3d(
-            x=wx, y=wy, z=wz,
-            mode='lines',
-            line=dict(color='black', width=4),
-            hoverinfo='skip',
-            showlegend=False
-        )
+        return Visualizer._box_wireframe(0, 0, 0, L, W, H, color="black", width=5)
 
-    def generateVisualization(self, result: Dict[str, Any], testName: str) -> Optional[str]:
+    def generatePackingVisualization(
+        self,
+        result: Dict[str, Any],
+        testName: str
+    ) -> List[str]:
+        files: List[str] = []
         try:
-            solution: PackingSolution = result.get('solution')
-            if solution is None or not hasattr(solution, 'placedItems'):
-                logger.error("  错误: 缺少有效的 solution.placedItems")
-                return None
-
-            placedItems = solution.placedItems
-            if not placedItems:
-                logger.warning("  警告: 没有放置任何货物，跳过可视化")
-                return None
-
-            container = result['container']
-            L, W, H = container.L, container.W, container.H
-            logger.info(f"  货物数量: {len(placedItems)}")
-
-            PALETTE: List[Tuple[float, float, float]] = [
-                (0.329, 0.659, 0.545), (0.847, 0.459, 0.247), (0.420, 0.502, 0.784),
-                (0.835, 0.369, 0.424), (0.929, 0.788, 0.306), (0.545, 0.753, 0.812),
-                (0.667, 0.467, 0.784), (0.478, 0.647, 0.306), (0.902, 0.608, 0.392),
-                (0.384, 0.620, 0.718), (0.776, 0.502, 0.655), (0.647, 0.722, 0.420),
-            ]
-
-            spec_to_rgba: Dict[Tuple[float, float, float, float], Tuple[float, float, float]] = {}
-            spec_to_legend_color: Dict[Tuple[float, float, float, float], str] = {}
-            spec_to_actual_dims: Dict[Tuple[float, float, float, float], Set[Tuple[float, float, float]]] = {}
-            color_counter = 0
-
-            def get_dims(item: Item, rotation: int) -> Tuple[float, float, float]:
-                # 0: (l, w, h), 1: (l, h, w), 2: (w, l, h), 3: (w, h, l), 4: (h, l, w), 5: (h, w, l)
-                if rotation == 0: return (item.l, item.w, item.h)
-                if rotation == 1: return (item.l, item.h, item.w)
-                if rotation == 2: return (item.w, item.l, item.h)
-                if rotation == 3: return (item.w, item.h, item.l)
-                if rotation == 4: return (item.h, item.l, item.w)
-                if rotation == 5: return (item.h, item.w, item.l)
-                return (item.l, item.w, item.h)
-
-            traces = []
-            seen_ids = set()
-            for itemId, x, y, z, rotation in placedItems:
-                if itemId in seen_ids:
-                    logger.warning(f"    严重警告: 发现重复放置的货物 ID={itemId}")
-                seen_ids.add(itemId)
-
-                item = next((it for it in result['items'] if it.id == itemId), None)
-                if item is None:
-                    continue
-
-                dx, dy, dz = get_dims(item, rotation)
-                sorted_dims = tuple(sorted([item.l, item.w, item.h]))
-                spec_key = (*sorted_dims, item.weight)
-
-                if spec_key not in spec_to_actual_dims:
-                    spec_to_actual_dims[spec_key] = set()
-                spec_to_actual_dims[spec_key].add((dx, dy, dz))
-
-                if spec_key not in spec_to_rgba:
-                    rgba = PALETTE[color_counter % len(PALETTE)]
-                    spec_to_rgba[spec_key] = rgba
-                    r, g, b = [int(c*255) for c in rgba]
-                    spec_to_legend_color[spec_key] = f"rgb({r},{g},{b})"
-                    color_counter += 1
-
-                color_str = spec_to_legend_color[spec_key]
-                hover_text = f"ID: {item.id}<br>规格: {item.l}x{item.w}x{item.h}<br>当前姿态: {dx}x{dy}x{dz}<br>坐标: ({x},{y},{z})"
-                
-                # 添加 3D 网格体
-                traces.append(self._box_mesh(x, y, z, dx, dy, dz, color_str, hovertext=hover_text))
-                # 添加 3D 边缘线
-                traces.append(self._box_wireframe(x, y, z, dx, dy, dz))
-
-            for spec, actual_dims in spec_to_actual_dims.items():
-                if len(actual_dims) > 1:
-                    logger.info(f"  规格 {spec} 使用了 {len(actual_dims)} 种旋转姿态: {actual_dims}")
-
-            # 集装箱外框
-            traces.append(self._container_wireframe(L, W, H))
-
-            # 图例
-            for dims_and_wt, color_str in spec_to_legend_color.items():
-                l, w, h, wt = dims_and_wt
-                traces.append(go.Scatter3d(x=[None], y=[None], z=[None], mode='markers', marker=dict(size=10, color=color_str, symbol='square'), name=f"{l}×{w}×{h}, {wt}kg", showlegend=True))
-
-            layout = go.Layout(
-                title=dict(text=f"{testName} - {result['testIndex']}", x=0.5),
-                scene=dict(
-                    xaxis=dict(title='X', range=[0, L], showbackground=True),
-                    yaxis=dict(title='Y', range=[0, W], showbackground=True),
-                    zaxis=dict(title='Z', range=[0, H], showbackground=True),
-                    aspectmode='data',
-                    camera=dict(eye=dict(x=1.8, y=1.8, z=1.4)),
-                ),
-                width=1200, height=900,
-                paper_bgcolor='white',
-            )
-
-            fig = go.Figure(data=traces, layout=layout)
+            itemById = {item.id: item for item in result["items"]}
             testFolder = os.path.join(self.resultsDir, testName)
             os.makedirs(testFolder, exist_ok=True)
-            html_file = os.path.abspath(os.path.join(testFolder, f"pic_{result['testIndex']}.html"))
-            fig.write_html(html_file, include_plotlyjs=True)
-            logger.info(f"  HTML已保存: {html_file}")
 
-            if self.outputConfig.get("saveStaticImage", True):
-                try:
-                    png_file = os.path.abspath(os.path.join(testFolder, f"pic_{result['testIndex']}.png"))
-                    fig.write_image(png_file, width=1200, height=900, scale=1.5)
-                    logger.info(f"  PNG已保存: {png_file}")
-                except Exception:
-                    pass
+            for containerLoad in result.get("containerLoads", []):
+                if not containerLoad.placements:
+                    continue
 
-            return html_file
+                traces = [self._container_wireframe(
+                    containerLoad.container.L,
+                    containerLoad.container.W,
+                    containerLoad.container.H
+                )]
+                palette = [
+                    "rgb(84, 168, 139)",
+                    "rgb(216, 117, 63)",
+                    "rgb(107, 128, 200)",
+                    "rgb(213, 94, 108)",
+                    "rgb(237, 201, 78)"
+                ]
+                colorByType: Dict[str, str] = {}
+
+                for placement in containerLoad.placements:
+                    item = itemById.get(placement.itemId)
+                    if item is None:
+                        continue
+                    dims = item.get_oriented_dims(placement.rotation)
+                    if dims is None:
+                        continue
+                    color = colorByType.setdefault(
+                        item.typeId,
+                        palette[len(colorByType) % len(palette)]
+                    )
+                    tagText = ",".join(item.tags)
+                    hoverText = (
+                        f"item={item.id}<br>type={item.typeId}<br>tags={tagText}<br>"
+                        f"pos=({placement.x},{placement.y},{placement.z})<br>"
+                        f"dims={dims[0]}x{dims[1]}x{dims[2]}"
+                    )
+                    traces.append(
+                        self._box_mesh(
+                            placement.x,
+                            placement.y,
+                            placement.z,
+                            dims[0],
+                            dims[1],
+                            dims[2],
+                            color,
+                            hovertext=hoverText
+                        )
+                    )
+                    traces.append(
+                        self._box_wireframe(
+                            placement.x,
+                            placement.y,
+                            placement.z,
+                            dims[0],
+                            dims[1],
+                            dims[2]
+                        )
+                    )
+
+                layout = go.Layout(
+                    title=dict(
+                        text=(
+                            f"{testName} - {containerLoad.container.instanceId} "
+                            f"(fill={containerLoad.fillRate:.2%}, cost={containerLoad.container.tripCost})"
+                        ),
+                        x=0.5
+                    ),
+                    scene=dict(
+                        xaxis=dict(title="X", range=[0, containerLoad.container.L]),
+                        yaxis=dict(title="Y", range=[0, containerLoad.container.W]),
+                        zaxis=dict(title="Z", range=[0, containerLoad.container.H]),
+                        aspectmode="data"
+                    ),
+                    width=1200,
+                    height=900,
+                    paper_bgcolor="white"
+                )
+                figure = go.Figure(data=traces, layout=layout)
+                filePath = os.path.abspath(
+                    os.path.join(
+                        testFolder,
+                        f"packing_g{result['combinationIndex']:02d}_"
+                        f"r{result['repeatIndex']:02d}_"
+                        f"{containerLoad.container.instanceId}.html"
+                    )
+                )
+                figure.write_html(filePath, include_plotlyjs=True)
+                files.append(filePath)
+                logger.info(f"  装箱可视化已保存: {filePath}")
+
+            return files
         except Exception as e:
-            logger.error(f"  可视化生成失败: {e}")
+            logger.error(f"  装箱可视化生成失败: {e}")
             logger.debug(traceback.format_exc())
-            return None
+            return files
+
+    def generateAnalysisVisualizations(
+        self,
+        tables: Dict[str, List[Dict[str, Any]]],
+        analysisConfig: Dict[str, Any],
+        testName: str
+    ) -> List[str]:
+        files: List[str] = []
+        scatterPlots = analysisConfig.get("scatterPlots", [])
+        if not scatterPlots:
+            return files
+
+        testFolder = os.path.join(self.resultsDir, testName)
+        os.makedirs(testFolder, exist_ok=True)
+
+        for index, spec in enumerate(scatterPlots, start=1):
+            level = spec.get("level", "group")
+            xField = spec.get("x")
+            yField = spec.get("y")
+            colorField = spec.get("color")
+            title = spec.get("title", f"{level}: {xField} vs {yField}")
+            rows = tables.get(level, [])
+            if not rows or not xField or not yField:
+                continue
+
+            filteredRows = [
+                row for row in rows
+                if row.get(xField) is not None and row.get(yField) is not None
+            ]
+            if not filteredRows:
+                continue
+
+            markerColors = (
+                [row.get(colorField) for row in filteredRows]
+                if colorField else "rgb(84, 168, 139)"
+            )
+            figure = go.Figure(
+                data=[
+                    go.Scatter(
+                        x=[row.get(xField) for row in filteredRows],
+                        y=[row.get(yField) for row in filteredRows],
+                        mode="markers",
+                        marker=dict(
+                            size=10,
+                            color=markerColors,
+                            showscale=False
+                        ),
+                        text=[
+                            f"test={row.get('testName')}<br>"
+                            f"algorithm={row.get('algorithmType')}<br>"
+                            f"group={row.get('combinationIndex')}"
+                            for row in filteredRows
+                        ],
+                        hoverinfo="text"
+                    )
+                ]
+            )
+            figure.update_layout(
+                title=title,
+                xaxis_title=xField,
+                yaxis_title=yField,
+                width=1000,
+                height=700,
+                paper_bgcolor="white"
+            )
+            filePath = os.path.abspath(
+                os.path.join(testFolder, f"analysis_{level}_{index:02d}.html")
+            )
+            figure.write_html(filePath, include_plotlyjs=True)
+            files.append(filePath)
+            logger.info(f"  分析图已保存: {filePath}")
+
+        return files

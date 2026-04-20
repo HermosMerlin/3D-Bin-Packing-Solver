@@ -1,165 +1,170 @@
-from typing import Dict, Any, List, Optional, Tuple
-from dataStructures import Item, Container, PackingSolution
-
-ROTATION_DIMENSIONS: Dict[int, Tuple[str, str, str]] = {
-    0: ("l", "w", "h"),
-    1: ("l", "h", "w"),
-    2: ("w", "l", "h"),
-    3: ("w", "h", "l"),
-    4: ("h", "l", "w"),
-    5: ("h", "w", "l")
-}
+from typing import Any, Dict, List
+from dataStructures import ContainerLoad, PlanMetrics, ProblemInstance, ShipmentPlan
+from packingLogic import createEmptyLoad, evaluatePlacement
 
 VALIDATION_TOLERANCE = 1e-9
-MAX_OVERLAP_ERRORS = 20
-
-def getRotationDimensions(item: Item, rotation: int) -> Optional[Tuple[float, float, float]]:
-    """Return oriented dimensions for a rotation id, or None if invalid."""
-    axisOrder = ROTATION_DIMENSIONS.get(rotation)
-    if axisOrder is None:
-        return None
-    return tuple(getattr(item, axis) for axis in axisOrder)
 
 def buildPlacementRecords(
-    items: List[Item],
-    solution: PackingSolution
+    problem: ProblemInstance,
+    plan: ShipmentPlan
 ) -> List[Dict[str, Any]]:
-    """Expand placements into records that are easier to validate and export."""
-    itemById = {item.id: item for item in items}
+    itemById = {item.id: item for item in problem.items}
     records: List[Dict[str, Any]] = []
 
-    for placementOrder, (itemId, x, y, z, rotation) in enumerate(solution.placedItems, start=1):
-        item = itemById.get(itemId)
-        placedDims = getRotationDimensions(item, rotation) if item is not None else None
-        records.append({
-            "placementOrder": placementOrder,
-            "itemId": itemId,
-            "item": item,
-            "typeId": getattr(item, "typeId", None) if item is not None else None,
-            "x": x,
-            "y": y,
-            "z": z,
-            "rotation": rotation,
-            "placedDims": placedDims
-        })
+    for containerIndex, load in enumerate(plan.containerLoads, start=1):
+        for placementOrder, placement in enumerate(load.placements, start=1):
+            item = itemById.get(placement.itemId)
+            placedDims = (
+                item.get_oriented_dims(placement.rotation)
+                if item is not None else None
+            )
+            records.append({
+                "containerIndex": containerIndex,
+                "containerInstanceId": load.container.instanceId,
+                "containerTypeId": load.container.containerTypeId,
+                "placementOrder": placementOrder,
+                "itemId": placement.itemId,
+                "item": item,
+                "itemTypeId": item.typeId if item is not None else None,
+                "tags": list(item.tags) if item is not None else [],
+                "x": placement.x,
+                "y": placement.y,
+                "z": placement.z,
+                "rotation": placement.rotation,
+                "placedDims": placedDims,
+                "supportSource": placement.supportSource,
+                "supportInstanceIds": list(placement.supportInstanceIds),
+                "supportAreaRatio": placement.supportAreaRatio,
+                "bearingPressure": placement.bearingPressure,
+                "topClearanceCm": placement.topClearanceCm,
+                "projectionContained": placement.projectionContained
+            })
 
     return records
 
-def _boxesOverlap(
-    first: Dict[str, Any],
-    second: Dict[str, Any],
-    tolerance: float
-) -> bool:
-    firstL, firstW, firstH = first["placedDims"]
-    secondL, secondW, secondH = second["placedDims"]
+def computePlanMetrics(
+    problem: ProblemInstance,
+    plan: ShipmentPlan
+) -> PlanMetrics:
+    totalCost = sum(load.container.tripCost for load in plan.containerLoads if load.placements)
+    packedVolume = sum(load.totalVolume for load in plan.containerLoads)
+    packedWeight = sum(load.totalWeight for load in plan.containerLoads)
+    totalContainerVolume = sum(load.container.volume for load in plan.containerLoads if load.placements)
+    fillRates = [load.fillRate for load in plan.containerLoads if load.placements]
+    weightRates = [load.weightRate for load in plan.containerLoads if load.placements]
+    packedItemCount = sum(len(load.placements) for load in plan.containerLoads)
+    usedTypeIds = {
+        load.container.containerTypeId
+        for load in plan.containerLoads
+        if load.placements
+    }
 
-    separated = (
-        first["x"] + firstL <= second["x"] + tolerance or
-        second["x"] + secondL <= first["x"] + tolerance or
-        first["y"] + firstW <= second["y"] + tolerance or
-        second["y"] + secondW <= first["y"] + tolerance or
-        first["z"] + firstH <= second["z"] + tolerance or
-        second["z"] + secondH <= first["z"] + tolerance
+    metrics = PlanMetrics(
+        totalCost=totalCost,
+        usedContainerCount=sum(1 for load in plan.containerLoads if load.placements),
+        usedContainerTypeCount=len(usedTypeIds),
+        packedItemCount=packedItemCount,
+        unpackedItemCount=len(plan.unpackedItemIds),
+        packedVolume=packedVolume,
+        packedWeight=packedWeight,
+        totalContainerVolume=totalContainerVolume,
+        totalFillRate=(
+            packedVolume / totalContainerVolume if totalContainerVolume > 0 else 0.0
+        ),
+        avgContainerFillRate=(
+            sum(fillRates) / len(fillRates) if fillRates else 0.0
+        ),
+        maxContainerFillRate=max(fillRates) if fillRates else 0.0,
+        avgContainerWeightRate=(
+            sum(weightRates) / len(weightRates) if weightRates else 0.0
+        ),
+        objectiveName=problem.objective.name or problem.objective.primaryMetric,
+        objectiveValue=0.0
     )
-    return not separated
+    objectiveValue = getattr(metrics, problem.objective.primaryMetric, 0.0)
+    metrics.objectiveValue = float(objectiveValue)
+    return metrics
 
-def validatePackingSolution(
-    container: Container,
-    items: List[Item],
-    solution: PackingSolution,
-    tolerance: float = VALIDATION_TOLERANCE
+def validateShipmentPlan(
+    problem: ProblemInstance,
+    plan: ShipmentPlan
 ) -> Dict[str, Any]:
-    """Validate boundary, uniqueness, overlap, and aggregate metrics."""
     errors: List[str] = []
-    records = buildPlacementRecords(items, solution)
-    seenItemIds = set()
-    accumulatedWeight = 0.0
-    accumulatedVolume = 0.0
+    itemById = {item.id: item for item in problem.items}
+    placedItemIds = set()
+    expectedItemIds = set(itemById.keys())
+    containerRows: List[Dict[str, Any]] = []
 
-    for record in records:
-        item = record["item"]
-        itemId = record["itemId"]
+    for containerIndex, load in enumerate(plan.containerLoads, start=1):
+        validationLoad: ContainerLoad = createEmptyLoad(load.container)
 
-        if item is None:
-            errors.append(f"Unknown item id: {itemId}")
-            continue
+        for placementOrder, placement in enumerate(load.placements, start=1):
+            item = itemById.get(placement.itemId)
+            if item is None:
+                errors.append(
+                    f"Container {containerIndex}: unknown item id {placement.itemId}"
+                )
+                continue
+            if placement.itemId in placedItemIds:
+                errors.append(f"Duplicate placement detected for item {placement.itemId}")
+                continue
 
-        if itemId in seenItemIds:
-            errors.append(f"Duplicate placement detected for item {itemId}")
-        seenItemIds.add(itemId)
+            feedback = evaluatePlacement(
+                load=validationLoad,
+                item=item,
+                x=placement.x,
+                y=placement.y,
+                z=placement.z,
+                rotation=placement.rotation,
+                itemLookup=itemById,
+                globalConstraints=problem.globalConstraints
+            )
+            if not feedback.isFeasible:
+                errors.append(
+                    f"Container {containerIndex}, placement {placementOrder}, item {placement.itemId}: "
+                    f"{feedback.reasonCode}"
+                )
+                continue
 
-        if record["placedDims"] is None:
-            errors.append(f"Invalid rotation {record['rotation']} for item {itemId}")
-            continue
+            validationLoad.add_placement(item, placement)
+            placedItemIds.add(placement.itemId)
 
-        placedL, placedW, placedH = record["placedDims"]
-        x, y, z = record["x"], record["y"], record["z"]
+        containerRows.append({
+            "containerIndex": containerIndex,
+            "containerInstanceId": load.container.instanceId,
+            "containerTypeId": load.container.containerTypeId,
+            "tripCost": load.container.tripCost,
+            "placedCount": len(load.placements),
+            "fillRate": validationLoad.fillRate,
+            "weightRate": validationLoad.weightRate,
+            "totalWeight": validationLoad.totalWeight,
+            "totalVolume": validationLoad.totalVolume
+        })
 
-        if x < -tolerance or y < -tolerance or z < -tolerance:
+        if abs(validationLoad.totalWeight - load.totalWeight) > VALIDATION_TOLERANCE:
             errors.append(
-                f"Negative origin for item {itemId}: ({x}, {y}, {z})"
+                f"Container {containerIndex}: stored totalWeight mismatch "
+                f"{load.totalWeight} vs {validationLoad.totalWeight}"
+            )
+        if abs(validationLoad.totalVolume - load.totalVolume) > VALIDATION_TOLERANCE:
+            errors.append(
+                f"Container {containerIndex}: stored totalVolume mismatch "
+                f"{load.totalVolume} vs {validationLoad.totalVolume}"
             )
 
-        if x + placedL > container.L + tolerance:
-            errors.append(f"Item {itemId} exceeds container length bound")
-        if y + placedW > container.W + tolerance:
-            errors.append(f"Item {itemId} exceeds container width bound")
-        if z + placedH > container.H + tolerance:
-            errors.append(f"Item {itemId} exceeds container height bound")
+    declaredUnpacked = set(plan.unpackedItemIds)
+    if placedItemIds & declaredUnpacked:
+        errors.append("Some items are both placed and marked unpacked")
+    if placedItemIds | declaredUnpacked != expectedItemIds:
+        missingIds = sorted(expectedItemIds - (placedItemIds | declaredUnpacked))
+        if missingIds:
+            errors.append(f"Items missing from plan accounting: {missingIds}")
 
-        accumulatedWeight += item.weight
-        accumulatedVolume += item.volume
-
-    overlapErrors = 0
-    for i, first in enumerate(records):
-        if first["item"] is None or first["placedDims"] is None:
-            continue
-        for second in records[i + 1:]:
-            if second["item"] is None or second["placedDims"] is None:
-                continue
-            if _boxesOverlap(first, second, tolerance):
-                overlapErrors += 1
-                errors.append(
-                    f"Overlap detected between item {first['itemId']} and item {second['itemId']}"
-                )
-                if overlapErrors >= MAX_OVERLAP_ERRORS:
-                    errors.append("Too many overlap errors; remaining overlaps omitted")
-                    break
-        if overlapErrors >= MAX_OVERLAP_ERRORS:
-            break
-
-    if accumulatedWeight > container.maxWeight + tolerance:
-        errors.append(
-            f"Total weight {accumulatedWeight} exceeds container limit {container.maxWeight}"
-        )
-
-    if abs(solution.totalWeight - accumulatedWeight) > tolerance:
-        errors.append(
-            f"Stored totalWeight {solution.totalWeight} does not match placement sum {accumulatedWeight}"
-        )
-
-    if abs(solution.totalVolume - accumulatedVolume) > tolerance:
-        errors.append(
-            f"Stored totalVolume {solution.totalVolume} does not match placement sum {accumulatedVolume}"
-        )
-
-    expectedVolumeRate = accumulatedVolume / container.volume if container.volume > 0 else 0.0
-    expectedWeightRate = accumulatedWeight / container.maxWeight if container.maxWeight > 0 else 0.0
-
-    if abs(solution.volumeRate - expectedVolumeRate) > 1e-6:
-        errors.append(
-            f"Stored volumeRate {solution.volumeRate} does not match computed value {expectedVolumeRate}"
-        )
-
-    if abs(solution.weightRate - expectedWeightRate) > 1e-6:
-        errors.append(
-            f"Stored weightRate {solution.weightRate} does not match computed value {expectedWeightRate}"
-        )
-
+    metrics = computePlanMetrics(problem, plan)
     return {
         "isValid": len(errors) == 0,
         "errors": errors,
-        "placementRecords": records,
-        "computedTotalWeight": accumulatedWeight,
-        "computedTotalVolume": accumulatedVolume
+        "containerRows": containerRows,
+        "placementRecords": buildPlacementRecords(problem, plan),
+        "metrics": metrics
     }

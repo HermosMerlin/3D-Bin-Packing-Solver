@@ -4,12 +4,12 @@ import os
 import random
 import time
 from functools import lru_cache
-from typing import List, Dict, Any, Tuple
-from dataStructures import Item, Container, PackingSolution
-from optimization import optimizePacking, filterAlgorithmParams, formatAlgorithmParams
+from typing import Any, Dict, List, Tuple
+from dataStructures import ProblemInstance, ShipmentPlan
 from logger import get_logger
+from optimization import optimizePacking, filterAlgorithmParams, formatAlgorithmParams
+from solutionValidator import validateShipmentPlan
 from testCaseManager import TestCaseManager
-from solutionValidator import validatePackingSolution
 
 logger = get_logger("testRunner")
 
@@ -17,40 +17,24 @@ CACHE_FINGERPRINT_FILES: Tuple[str, ...] = (
     "optimization.py",
     "packingLogic.py",
     "dataStructures.py",
+    "solutionValidator.py",
     "testRunner.py"
 )
-DEFAULT_CACHE_VERSION = 1
+DEFAULT_CACHE_VERSION = 3
+DEFAULT_BASE_SEED = 42
 
 def generateTimeSeed() -> int:
-    """Generate a seed based on the current time."""
     timestamp = int(time.time() * 1000)
     randomPart = random.randint(0, 9999)
     return timestamp + randomPart
 
-def generateItemsFromTypes(itemTypes: List[Dict[str, Any]]) -> List[Item]:
-    """Build item instances from the test-case item specification."""
-    items: List[Item] = []
-    itemIdCounter = 1
-
-    for itemType in itemTypes:
-        count = itemType["count"]
-        for _ in range(count):
-            item = Item(
-                id=itemIdCounter,
-                l=itemType["l"],
-                w=itemType["w"],
-                h=itemType["h"],
-                weight=itemType["weight"],
-                typeId=itemType.get("typeId")
-            )
-            items.append(item)
-            itemIdCounter += 1
-
-    return items
+def generateDeterministicSeed(baseSeed: int, repeatIndex: int) -> int:
+    return baseSeed + max(0, repeatIndex - 1)
 
 def get_hash(data: Any) -> str:
-    """Calculate a SHA256 hash for cache addressing."""
-    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
 
 @lru_cache(maxsize=1)
 def _getProjectRoot() -> str:
@@ -58,25 +42,21 @@ def _getProjectRoot() -> str:
 
 @lru_cache(maxsize=1)
 def _computeCodeFingerprint() -> str:
-    """Hash only the solver files that can affect packing results."""
     hasher = hashlib.sha256()
     projectRoot = _getProjectRoot()
 
     for relativePath in CACHE_FINGERPRINT_FILES:
         filePath = os.path.join(projectRoot, relativePath)
         hasher.update(relativePath.encode("utf-8"))
-
         if not os.path.exists(filePath):
             hasher.update(b"<missing>")
             continue
-
         with open(filePath, "rb") as f:
             hasher.update(f.read())
 
     return hasher.hexdigest()
 
 def buildCacheIdentity(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Build cache metadata once per run."""
     outputConfig = config.get("output", {})
     return {
         "cacheVersion": outputConfig.get("cacheVersion", DEFAULT_CACHE_VERSION),
@@ -87,18 +67,13 @@ def _getCacheInvalidReason(
     cachedResult: Dict[str, Any],
     cacheIdentity: Dict[str, Any]
 ) -> str:
-    cachedVersion = cachedResult.get("cacheVersion")
-    currentVersion = cacheIdentity["cacheVersion"]
-    if cachedVersion != currentVersion:
-        return f"cacheVersion={cachedVersion} -> {currentVersion}"
-
-    cachedFingerprint = cachedResult.get("codeFingerprint")
-    currentFingerprint = cacheIdentity["codeFingerprint"]
-    if cachedFingerprint != currentFingerprint:
-        if cachedFingerprint is None:
-            return "missing codeFingerprint"
+    if cachedResult.get("cacheVersion") != cacheIdentity["cacheVersion"]:
+        return (
+            f"cacheVersion={cachedResult.get('cacheVersion')} -> "
+            f"{cacheIdentity['cacheVersion']}"
+        )
+    if cachedResult.get("codeFingerprint") != cacheIdentity["codeFingerprint"]:
         return "code fingerprint changed"
-
     return ""
 
 def _logValidationErrors(prefix: str, errors: List[str]) -> None:
@@ -109,38 +84,61 @@ def _logValidationErrors(prefix: str, errors: List[str]) -> None:
         logger.warning(f"      - ... {len(errors) - 5} more")
 
 def _buildResultPayload(
-    testCase: Dict[str, Any],
-    container: Container,
-    items: List[Item],
-    solution: PackingSolution,
+    problem: ProblemInstance,
+    plan: ShipmentPlan,
     algorithmType: str,
     params: Dict[str, Any],
+    baseSeed: int,
     seed: int,
     useTimeSeed: bool,
     executionTime: float,
     isCached: bool,
-    testIndex: int,
-    totalTests: int
+    runIndex: int,
+    totalRuns: int,
+    combinationIndex: int,
+    totalCombinations: int,
+    repeatIndex: int,
+    repeatCount: int
 ) -> Dict[str, Any]:
-    validation = validatePackingSolution(container, items, solution)
+    validation = validateShipmentPlan(problem, plan)
     if not validation["isValid"]:
-        sourceLabel = "cached solution" if isCached else "computed solution"
+        sourceLabel = "cached plan" if isCached else "computed plan"
         _logValidationErrors(f"    ({sourceLabel} invalid)", validation["errors"])
 
+    metrics = validation["metrics"]
     return {
-        "testName": testCase["name"],
-        "testIndex": testIndex,
-        "totalTests": totalTests,
-        "container": container,
-        "items": items,
-        "itemTypes": testCase["itemTypes"],
-        "solution": solution,
-        "volumeRate": solution.volumeRate,
-        "weightRate": solution.weightRate,
-        "placedCount": len(solution.placedItems),
+        "testName": problem.name,
+        "testIndex": runIndex,
+        "totalTests": totalRuns,
+        "runIndex": runIndex,
+        "totalRuns": totalRuns,
+        "combinationIndex": combinationIndex,
+        "totalCombinations": totalCombinations,
+        "repeatIndex": repeatIndex,
+        "repeatCount": repeatCount,
+        "problem": problem,
+        "plan": plan,
+        "containerLoads": plan.containerLoads,
+        "items": problem.items,
+        "itemTypes": problem.itemTypes,
+        "containerTypes": problem.containerTypes,
+        "analysis": problem.analysis,
+        "scenarioMetadata": problem.scenarioMetadata,
+        "volumeRate": metrics.totalFillRate,
+        "weightRate": metrics.avgContainerWeightRate,
+        "placedCount": metrics.packedItemCount,
+        "unpackedCount": metrics.unpackedItemCount,
+        "totalCost": metrics.totalCost,
+        "usedContainerCount": metrics.usedContainerCount,
+        "objectiveName": metrics.objectiveName,
+        "objectiveValue": metrics.objectiveValue,
+        "metrics": metrics,
+        "containerRows": validation["containerRows"],
+        "placementRecords": validation["placementRecords"],
         "algorithmParams": {
             "algorithmType": algorithmType,
             "params": params,
+            "baseSeed": baseSeed,
             "seed": seed,
             "useTimeSeed": useTimeSeed
         },
@@ -154,23 +152,28 @@ def runSingleTest(
     testCase: Dict[str, Any],
     config: Dict[str, Any],
     paramCombination: Dict[str, Any],
-    testIndex: int,
-    totalTests: int,
-    cacheIdentity: Dict[str, Any]
+    combinationIndex: int,
+    totalCombinations: int,
+    repeatIndex: int,
+    repeatCount: int,
+    runIndex: int,
+    totalRuns: int,
+    cacheIdentity: Dict[str, Any],
+    testCaseManager: TestCaseManager
 ) -> Dict[str, Any]:
-    """Run one concrete algorithm/parameter combination."""
     algorithmType = paramCombination.get("algorithmType", "greedy_search")
-    params = filterAlgorithmParams(
-        algorithmType,
-        paramCombination.get("params", {})
+    params = filterAlgorithmParams(algorithmType, paramCombination.get("params", {}))
+    useTimeSeed = bool(paramCombination.get("useTimeSeed", False))
+    baseSeed = paramCombination.get("baseSeed", DEFAULT_BASE_SEED)
+    seed = (
+        generateTimeSeed()
+        if useTimeSeed
+        else generateDeterministicSeed(baseSeed, repeatIndex)
     )
-    useTimeSeed = paramCombination.get("useTimeSeed", True)
-    seed = generateTimeSeed() if useTimeSeed else 42
 
     outputConfig = config.get("output", {})
     enableCache = outputConfig.get("enableCache", False)
     cacheDir = outputConfig.get("cacheDir", "cache")
-
     inputData = {
         "testCase": testCase,
         "algorithmType": algorithmType,
@@ -181,89 +184,72 @@ def runSingleTest(
     cacheFile = os.path.join(cacheDir, f"{inputHash}.json")
 
     if enableCache:
-        if not os.path.exists(cacheDir):
-            os.makedirs(cacheDir, exist_ok=True)
-
+        os.makedirs(cacheDir, exist_ok=True)
         if os.path.exists(cacheFile):
             try:
                 with open(cacheFile, "r", encoding="utf-8") as f:
                     cachedResult = json.load(f)
-
                 invalidReason = _getCacheInvalidReason(cachedResult, cacheIdentity)
                 if not invalidReason:
-                    containerData = testCase["container"]
-                    container = Container(
-                        L=containerData["L"],
-                        W=containerData["W"],
-                        H=containerData["H"],
-                        maxWeight=containerData["maxWeight"]
-                    )
-                    items = generateItemsFromTypes(testCase["itemTypes"])
-                    solution = PackingSolution.from_dict(cachedResult["solution"])
+                    problem = testCaseManager.buildProblemInstance(testCase)
+                    plan = ShipmentPlan.from_dict(cachedResult["plan"])
                     resultPayload = _buildResultPayload(
-                        testCase=testCase,
-                        container=container,
-                        items=items,
-                        solution=solution,
+                        problem=problem,
+                        plan=plan,
                         algorithmType=algorithmType,
                         params=params,
+                        baseSeed=baseSeed,
                         seed=seed,
                         useTimeSeed=useTimeSeed,
-                        executionTime=cachedResult.get("executionTime", 0.0),
+                        executionTime=float(cachedResult.get("executionTime", 0.0)),
                         isCached=True,
-                        testIndex=testIndex,
-                        totalTests=totalTests
+                        runIndex=runIndex,
+                        totalRuns=totalRuns,
+                        combinationIndex=combinationIndex,
+                        totalCombinations=totalCombinations,
+                        repeatIndex=repeatIndex,
+                        repeatCount=repeatCount
                     )
-
                     if resultPayload["isValid"]:
                         logger.info(f"    (缓存命中: {inputHash[:8]}...)")
                         return resultPayload
-
-                    invalidReason = "cached solution failed validation"
-
+                    invalidReason = "cached plan failed validation"
                 logger.info(f"    (缓存失效: {invalidReason})")
             except Exception as e:
                 logger.warning(f"    (缓存读取失败: {e})")
 
+    problem = testCaseManager.buildProblemInstance(testCase)
     startTime = time.time()
-
-    containerData = testCase["container"]
-    container = Container(
-        L=containerData["L"],
-        W=containerData["W"],
-        H=containerData["H"],
-        maxWeight=containerData["maxWeight"]
-    )
-    items = generateItemsFromTypes(testCase["itemTypes"])
-
-    solution: PackingSolution = optimizePacking(
-        container,
-        items,
+    plan = optimizePacking(
+        problem=problem,
         algorithmType=algorithmType,
         params=params,
         seed=seed
     )
-
     executionTime = time.time() - startTime
+
     resultPayload = _buildResultPayload(
-        testCase=testCase,
-        container=container,
-        items=items,
-        solution=solution,
+        problem=problem,
+        plan=plan,
         algorithmType=algorithmType,
         params=params,
+        baseSeed=baseSeed,
         seed=seed,
         useTimeSeed=useTimeSeed,
         executionTime=executionTime,
         isCached=False,
-        testIndex=testIndex,
-        totalTests=totalTests
+        runIndex=runIndex,
+        totalRuns=totalRuns,
+        combinationIndex=combinationIndex,
+        totalCombinations=totalCombinations,
+        repeatIndex=repeatIndex,
+        repeatCount=repeatCount
     )
 
     if enableCache and resultPayload["isValid"]:
         try:
             cacheData = {
-                "solution": solution.to_dict(),
+                "plan": plan.to_dict(),
                 "executionTime": executionTime,
                 "inputHash": inputHash,
                 "cacheVersion": cacheIdentity["cacheVersion"],
@@ -274,7 +260,7 @@ def runSingleTest(
         except Exception as e:
             logger.warning(f"    (缓存写入失败: {e})")
     elif enableCache and not resultPayload["isValid"]:
-        logger.warning("    (跳过缓存写入: solution failed validation)")
+        logger.warning("    (跳过缓存写入: plan failed validation)")
 
     return resultPayload
 
@@ -285,39 +271,67 @@ def runTestSuite(
     defaultParams: Dict[str, Any],
     cacheIdentity: Dict[str, Any]
 ) -> Tuple[List[Dict[str, Any]], str]:
-    """Run all parameter combinations for a test case."""
     effectiveParams = testCaseManager.getEffectiveParams(
         testCase.get("algorithmParams", {}),
         defaultParams
     )
-
     paramCombinations = testCaseManager.generateParamCombinations(effectiveParams)
-    testCaseName: str = testCase["name"]
+    totalRuns = sum(
+        max(1, int(paramCombination.get("repeatCount", 1)))
+        for paramCombination in paramCombinations
+    )
+    testCaseName = testCase["name"]
 
     logger.info(f"\n测试用例: {testCaseName}")
-    logger.info(f"参数组合数: {len(paramCombinations)}")
+    logger.info(f"参数组数: {len(paramCombinations)}")
+    logger.info(f"总运行次数: {totalRuns}")
 
-    testCaseResults: List[Dict[str, Any]] = []
-    for i, paramCombination in enumerate(paramCombinations, 1):
+    results: List[Dict[str, Any]] = []
+    currentRunIndex = 0
+    for combinationIndex, paramCombination in enumerate(paramCombinations, start=1):
         algorithmType = paramCombination["algorithmType"]
         paramSummary = formatAlgorithmParams(
             algorithmType,
             paramCombination.get("params", {})
         )
-        seedMode = "time" if paramCombination.get("useTimeSeed", True) else "fixed(42)"
+        repeatCount = max(1, int(paramCombination.get("repeatCount", 1)))
+        useTimeSeed = bool(paramCombination.get("useTimeSeed", False))
+        baseSeed = paramCombination.get("baseSeed", DEFAULT_BASE_SEED)
+        if useTimeSeed:
+            seedMode = "time"
+        elif repeatCount == 1:
+            seedMode = f"fixed({baseSeed})"
+        else:
+            seedMode = f"fixed({baseSeed}..{generateDeterministicSeed(baseSeed, repeatCount)})"
+
         logger.info(
-            f"  运行组合 {i}/{len(paramCombinations)} [{algorithmType}]: "
-            f"{paramSummary}; seed={seedMode}"
+            f"  参数组 {combinationIndex}/{len(paramCombinations)} [{algorithmType}]: "
+            f"{paramSummary}; repeats={repeatCount}; seed={seedMode}"
         )
 
-        result = runSingleTest(
-            testCase,
-            config,
-            paramCombination,
-            i,
-            len(paramCombinations),
-            cacheIdentity
-        )
-        testCaseResults.append(result)
+        for repeatIndex in range(1, repeatCount + 1):
+            currentRunIndex += 1
+            seedPreview = (
+                "time-based" if useTimeSeed
+                else str(generateDeterministicSeed(baseSeed, repeatIndex))
+            )
+            logger.info(
+                f"    重复 {repeatIndex}/{repeatCount} -> "
+                f"run {currentRunIndex}/{totalRuns}; seed={seedPreview}"
+            )
+            result = runSingleTest(
+                testCase=testCase,
+                config=config,
+                paramCombination=paramCombination,
+                combinationIndex=combinationIndex,
+                totalCombinations=len(paramCombinations),
+                repeatIndex=repeatIndex,
+                repeatCount=repeatCount,
+                runIndex=currentRunIndex,
+                totalRuns=totalRuns,
+                cacheIdentity=cacheIdentity,
+                testCaseManager=testCaseManager
+            )
+            results.append(result)
 
-    return testCaseResults, testCaseName
+    return results, testCaseName

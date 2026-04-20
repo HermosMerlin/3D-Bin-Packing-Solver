@@ -3,4 +3,5 @@ __pycache__/
 test/
 *.md
 !problem.md
+!USAGE_GUIDE.md
 cache/

@@ -1,26 +1,18 @@
+import csv
+import json
 import os
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from logger import get_logger
-from optimization import formatAlgorithmParams
-from solutionValidator import buildPlacementRecords
+from optimization import buildPlanRankKey, formatAlgorithmParams
 
 logger = get_logger("resultSaver")
 
 class ResultSaver:
     def __init__(self, resultsDir: str = "results", outputConfig: Dict[str, Any] = None):
-        self.resultsDir: str = resultsDir
-        self.outputConfig: Dict[str, Any] = outputConfig or {}
+        self.resultsDir = resultsDir
+        self.outputConfig = outputConfig or {}
         os.makedirs(self.resultsDir, exist_ok=True)
-
-    @staticmethod
-    def _resultRankKey(result: Dict[str, Any]) -> tuple:
-        return (
-            result.get("volumeRate", 0.0),
-            result.get("weightRate", 0.0),
-            result.get("placedCount", 0),
-            -result.get("executionTime", float("inf"))
-        )
 
     @staticmethod
     def _normalizeSolutionTextMode(value: Any) -> str:
@@ -37,6 +29,40 @@ class ResultSaver:
     @staticmethod
     def _sanitizeFileNamePart(value: str) -> str:
         return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value)
+
+    @staticmethod
+    def _mean(values: List[float]) -> Optional[float]:
+        if not values:
+            return None
+        return sum(values) / len(values)
+
+    @staticmethod
+    def _std(values: List[float]) -> Optional[float]:
+        if not values:
+            return None
+        if len(values) == 1:
+            return 0.0
+        meanValue = ResultSaver._mean(values)
+        variance = sum((value - meanValue) ** 2 for value in values) / (len(values) - 1)
+        return variance ** 0.5
+
+    @staticmethod
+    def _formatPercent(value: Optional[float]) -> str:
+        if value is None:
+            return "N/A"
+        return f"{value:.2%}"
+
+    @staticmethod
+    def _formatFloat(value: Optional[float], digits: int = 3) -> str:
+        if value is None:
+            return "N/A"
+        return f"{value:.{digits}f}"
+
+    def _isHigherObjectiveBetter(self, result: Dict[str, Any]) -> bool:
+        return result["problem"].objective.primaryOrder == "max"
+
+    def _resultRankKey(self, result: Dict[str, Any]) -> Tuple[float, ...]:
+        return buildPlanRankKey(result["problem"], result["plan"])
 
     def _getValidResults(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return [result for result in results if result.get("isValid", False)]
@@ -63,6 +89,181 @@ class ResultSaver:
             return [bestValidResult]
         return []
 
+    def _groupResultsByCombination(self, results: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        grouped: Dict[Tuple[int, str, str], List[Dict[str, Any]]] = {}
+        for result in results:
+            algorithmInfo = result["algorithmParams"]
+            key = (
+                result["combinationIndex"],
+                algorithmInfo.get("algorithmType", "unknown"),
+                json.dumps(algorithmInfo.get("params", {}), sort_keys=True, ensure_ascii=False)
+            )
+            grouped.setdefault(key, []).append(result)
+        return sorted(grouped.values(), key=lambda group: group[0]["combinationIndex"])
+
+    def buildAnalysisTables(self, results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        runRows: List[Dict[str, Any]] = []
+        containerRows: List[Dict[str, Any]] = []
+        placementRows: List[Dict[str, Any]] = []
+
+        for result in results:
+            algorithmInfo = result["algorithmParams"]
+            metrics = result["metrics"]
+            paramValues = dict(algorithmInfo.get("params", {}))
+            baseRow = {
+                "testName": result["testName"],
+                "runIndex": result["runIndex"],
+                "combinationIndex": result["combinationIndex"],
+                "repeatIndex": result["repeatIndex"],
+                "algorithmType": algorithmInfo.get("algorithmType", "unknown"),
+                "algorithmParams": formatAlgorithmParams(
+                    algorithmInfo.get("algorithmType", "unknown"),
+                    algorithmInfo.get("params", {})
+                ),
+                "seed": algorithmInfo.get("seed"),
+                "useTimeSeed": algorithmInfo.get("useTimeSeed", False),
+                "baseSeed": algorithmInfo.get("baseSeed"),
+                "isValid": result["isValid"],
+                "isCached": result["isCached"],
+                "executionTime": result["executionTime"],
+                "objectiveName": result["objectiveName"],
+                "objectiveValue": result["objectiveValue"],
+                "totalCost": result["totalCost"],
+                "volumeRate": result["volumeRate"],
+                "weightRate": result["weightRate"],
+                "placedCount": result["placedCount"],
+                "unpackedCount": result["unpackedCount"],
+                "usedContainerCount": result["usedContainerCount"],
+                "usedContainerTypeCount": metrics.usedContainerTypeCount,
+                "avgContainerFillRate": metrics.avgContainerFillRate,
+                "maxContainerFillRate": metrics.maxContainerFillRate,
+                "avgContainerWeightRate": metrics.avgContainerWeightRate
+            }
+            baseRow.update(result.get("scenarioMetadata", {}))
+            baseRow.update(paramValues)
+            runRows.append(baseRow)
+
+            for containerRow in result.get("containerRows", []):
+                row = dict(baseRow)
+                row.update(containerRow)
+                containerRows.append(row)
+
+            for placementRecord in result.get("placementRecords", []):
+                item = placementRecord["item"]
+                row = dict(baseRow)
+                row.update({
+                    "containerIndex": placementRecord["containerIndex"],
+                    "containerInstanceId": placementRecord["containerInstanceId"],
+                    "containerTypeId": placementRecord["containerTypeId"],
+                    "placementOrder": placementRecord["placementOrder"],
+                    "itemId": placementRecord["itemId"],
+                    "itemTypeId": placementRecord["itemTypeId"],
+                    "tags": ",".join(placementRecord["tags"]),
+                    "x": placementRecord["x"],
+                    "y": placementRecord["y"],
+                    "z": placementRecord["z"],
+                    "rotation": placementRecord["rotation"],
+                    "placedL": placementRecord["placedDims"][0] if placementRecord["placedDims"] else None,
+                    "placedW": placementRecord["placedDims"][1] if placementRecord["placedDims"] else None,
+                    "placedH": placementRecord["placedDims"][2] if placementRecord["placedDims"] else None,
+                    "originalL": item.l if item is not None else None,
+                    "originalW": item.w if item is not None else None,
+                    "originalH": item.h if item is not None else None,
+                    "weight": item.weight if item is not None else None,
+                    "supportSource": placementRecord["supportSource"],
+                    "supportAreaRatio": placementRecord["supportAreaRatio"],
+                    "bearingPressure": placementRecord["bearingPressure"],
+                    "topClearanceCm": placementRecord["topClearanceCm"],
+                    "projectionContained": placementRecord["projectionContained"]
+                })
+                placementRows.append(row)
+
+        groupRows: List[Dict[str, Any]] = []
+        for groupResults in self._groupResultsByCombination(results):
+            firstResult = groupResults[0]
+            algorithmInfo = firstResult["algorithmParams"]
+            objectiveOrder = firstResult["problem"].objective.primaryOrder
+            paramValues = dict(algorithmInfo.get("params", {}))
+            validResults = self._getValidResults(groupResults)
+            bestValidResult = self._getBestValidResult(groupResults)
+            objectiveValues = [result["objectiveValue"] for result in validResults]
+            totalCosts = [result["totalCost"] for result in validResults]
+            fillRates = [result["volumeRate"] for result in validResults]
+            executionTimes = [result["executionTime"] for result in groupResults]
+            placedCounts = [float(result["placedCount"]) for result in validResults]
+            unpackedCounts = [float(result["unpackedCount"]) for result in validResults]
+
+            row = {
+                "testName": firstResult["testName"],
+                "combinationIndex": firstResult["combinationIndex"],
+                "algorithmType": algorithmInfo.get("algorithmType", "unknown"),
+                "algorithmParams": formatAlgorithmParams(
+                    algorithmInfo.get("algorithmType", "unknown"),
+                    algorithmInfo.get("params", {})
+                ),
+                "repeatCount": len(groupResults),
+                "validCount": len(validResults),
+                "invalidCount": len(groupResults) - len(validResults),
+                "objectiveName": firstResult["objectiveName"],
+                "objectiveOrder": objectiveOrder,
+                "avgObjectiveValue": self._mean(objectiveValues),
+                "stdObjectiveValue": self._std(objectiveValues),
+                "bestObjectiveValue": (
+                    bestValidResult["objectiveValue"] if bestValidResult is not None else None
+                ),
+                "avgTotalCost": self._mean(totalCosts),
+                "stdTotalCost": self._std(totalCosts),
+                "avgFillRate": self._mean(fillRates),
+                "stdFillRate": self._std(fillRates),
+                "avgPlacedCount": self._mean(placedCounts),
+                "stdPlacedCount": self._std(placedCounts),
+                "avgUnpackedCount": self._mean(unpackedCounts),
+                "avgExecutionTime": self._mean(executionTimes),
+                "stdExecutionTime": self._std(executionTimes)
+            }
+            row.update(firstResult.get("scenarioMetadata", {}))
+            row.update(paramValues)
+            groupRows.append(row)
+
+        return {
+            "run": runRows,
+            "group": groupRows,
+            "container": containerRows,
+            "placement": placementRows
+        }
+
+    def _writeCsv(self, path: str, rows: List[Dict[str, Any]]) -> None:
+        if not rows:
+            return
+        fieldnames = sorted({key for row in rows for key in row.keys()})
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def _writeJson(self, path: str, rows: List[Dict[str, Any]]) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, indent=2)
+
+    def _writeAnalysisExports(
+        self,
+        testFolder: str,
+        timestamp: str,
+        tables: Dict[str, List[Dict[str, Any]]]
+    ) -> None:
+        if not self.outputConfig.get("exportSummaryData", True):
+            return
+
+        for level, rows in tables.items():
+            if not rows:
+                continue
+            csvPath = os.path.abspath(os.path.join(testFolder, f"{level}_{timestamp}.csv"))
+            jsonPath = os.path.abspath(os.path.join(testFolder, f"{level}_{timestamp}.json"))
+            self._writeCsv(csvPath, rows)
+            self._writeJson(jsonPath, rows)
+            logger.info(f"{level} CSV 已生成: {csvPath}")
+            logger.info(f"{level} JSON 已生成: {jsonPath}")
+
     def _writeSolutionText(
         self,
         result: Dict[str, Any],
@@ -77,194 +278,145 @@ class ResultSaver:
         algorithmType = result["algorithmParams"].get("algorithmType", "unknown")
         safeAlgorithm = self._sanitizeFileNamePart(algorithmType)
         if isBestOverall:
-            filename = f"solution_best_{safeAlgorithm}_{timestamp}.txt"
+            filename = (
+                f"plan_best_{safeAlgorithm}_g{result['combinationIndex']:02d}_"
+                f"r{result['repeatIndex']:02d}_{timestamp}.txt"
+            )
         else:
-            filename = f"solution_{result['testIndex']:02d}_{safeAlgorithm}_{timestamp}.txt"
+            filename = (
+                f"plan_g{result['combinationIndex']:02d}_r{result['repeatIndex']:02d}_"
+                f"{safeAlgorithm}_{timestamp}.txt"
+            )
 
         filePath = os.path.abspath(os.path.join(solutionFolder, filename))
-        placementRecords = buildPlacementRecords(result["items"], result["solution"])
-        paramSummary = formatAlgorithmParams(
-            algorithmType,
-            result["algorithmParams"].get("params", {})
-        )
-        seedMode = "time-based" if result["algorithmParams"].get("useTimeSeed", True) else "fixed"
-        container = result["container"]
-
         with open(filePath, "w", encoding="utf-8") as f:
-            f.write("# Packing Solution\n")
-            f.write("schema_version: 1\n")
+            f.write("# Shipment Plan\n")
+            f.write("schema_version: 2\n")
             f.write(f"generated_at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"test_case: {testName}\n")
-            f.write(f"combination_index: {result['testIndex']}/{result['totalTests']}\n")
             f.write(f"algorithm: {algorithmType}\n")
-            f.write(f"algorithm_params: {paramSummary}\n")
-            f.write(f"seed: {result['algorithmParams'].get('seed')} ({seedMode})\n")
-            f.write(f"is_valid: {str(result.get('isValid', False)).lower()}\n")
-            f.write("\n")
-
-            f.write("# Container\n")
-            f.write(f"L: {container.L}\n")
-            f.write(f"W: {container.W}\n")
-            f.write(f"H: {container.H}\n")
-            f.write(f"maxWeight: {container.maxWeight}\n")
-            f.write("\n")
-
-            f.write("# Summary\n")
-            f.write(f"placed_count: {result['placedCount']}\n")
-            f.write(f"total_item_count: {len(result['items'])}\n")
-            f.write(f"volume_rate: {result['volumeRate']:.6f}\n")
-            f.write(f"weight_rate: {result['weightRate']:.6f}\n")
-            f.write(f"execution_time_s: {result['executionTime']:.6f}\n")
-            f.write("\n")
-
-            f.write("# Columns\n")
             f.write(
-                "placement_order,item_id,type_id,origin_x,origin_y,origin_z,"
-                "placed_l,placed_w,placed_h,rotation_id,original_l,original_w,original_h,weight\n"
+                f"algorithm_params: {formatAlgorithmParams(algorithmType, result['algorithmParams'].get('params', {}))}\n"
             )
-            for record in placementRecords:
-                item = record["item"]
-                placedDims = record["placedDims"] or ("NA", "NA", "NA")
-                originalDims = (
-                    (item.l, item.w, item.h) if item is not None else ("NA", "NA", "NA")
-                )
-                weight = item.weight if item is not None else "NA"
-                typeId = record["typeId"] if record["typeId"] is not None else ""
+            f.write(f"objective_name: {result['objectiveName']}\n")
+            f.write(f"objective_value: {result['objectiveValue']}\n")
+            f.write(f"total_cost: {result['totalCost']}\n")
+            f.write(f"used_container_count: {result['usedContainerCount']}\n")
+            f.write(f"placed_count: {result['placedCount']}\n")
+            f.write(f"unpacked_count: {result['unpackedCount']}\n")
+            f.write(f"fill_rate: {result['volumeRate']:.6f}\n")
+            f.write(f"execution_time_s: {result['executionTime']:.6f}\n")
+            f.write("\n# Containers\n")
+
+            for containerRow in result.get("containerRows", []):
                 f.write(
+                    f"- container_index={containerRow['containerIndex']}, "
+                    f"container_instance_id={containerRow['containerInstanceId']}, "
+                    f"container_type_id={containerRow['containerTypeId']}, "
+                    f"trip_cost={containerRow['tripCost']}, "
+                    f"placed_count={containerRow['placedCount']}, "
+                    f"fill_rate={containerRow['fillRate']:.6f}, "
+                    f"weight_rate={containerRow['weightRate']:.6f}\n"
+                )
+
+            f.write("\n# Placements\n")
+            f.write(
+                "container_index,placement_order,item_id,item_type_id,tags,"
+                "x,y,z,rotation,placed_l,placed_w,placed_h,support_source,"
+                "support_area_ratio,bearing_pressure,top_clearance_cm,projection_contained\n"
+            )
+            for record in result.get("placementRecords", []):
+                dims = record["placedDims"] or (None, None, None)
+                f.write(
+                    f"{record['containerIndex']},"
                     f"{record['placementOrder']},"
                     f"{record['itemId']},"
-                    f"{typeId},"
+                    f"{record['itemTypeId']},"
+                    f"{'|'.join(record['tags'])},"
                     f"{record['x']},"
                     f"{record['y']},"
                     f"{record['z']},"
-                    f"{placedDims[0]},"
-                    f"{placedDims[1]},"
-                    f"{placedDims[2]},"
                     f"{record['rotation']},"
-                    f"{originalDims[0]},"
-                    f"{originalDims[1]},"
-                    f"{originalDims[2]},"
-                    f"{weight}\n"
+                    f"{dims[0]},"
+                    f"{dims[1]},"
+                    f"{dims[2]},"
+                    f"{record['supportSource']},"
+                    f"{record['supportAreaRatio']},"
+                    f"{record['bearingPressure']},"
+                    f"{record['topClearanceCm']},"
+                    f"{record['projectionContained']}\n"
                 )
 
         logger.info(f"解文本已生成: {filePath}")
         return filePath
 
-    def saveResults(self, results: List[Dict[str, Any]], testName: str) -> str:
-        """Save a comparison report and optional text solutions for a single test case."""
+    def saveResults(self, results: List[Dict[str, Any]], testName: str) -> Dict[str, Any]:
         testFolder = os.path.join(self.resultsDir, testName)
         os.makedirs(testFolder, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        resultFile = os.path.join(testFolder, f"results_{timestamp}.txt")
-        absResultFile = os.path.abspath(resultFile)
-
+        reportPath = os.path.abspath(os.path.join(testFolder, f"results_{timestamp}.txt"))
         bestValidResult = self._getBestValidResult(results)
         solutionTextResults = self._selectSolutionTextResults(results, bestValidResult)
+        tables = self.buildAnalysisTables(results)
+        groupRows = tables["group"]
 
-        with open(absResultFile, "w", encoding="utf-8") as f:
+        with open(reportPath, "w", encoding="utf-8") as f:
             f.write("=" * 80 + "\n")
-            f.write(f"三维装箱算法综合对比报告 - {testName}\n")
+            f.write(f"装箱实验综合报告 - {testName}\n")
             f.write(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n\n")
 
-            f.write("【1. 性能汇总对比】\n")
-            header = (
-                "| 索引 | 算法类型 | 参数 | 合法性 | 空间利用率 | 重量利用率 | "
-                "装载数 | 运行耗时 | 状态 |"
+            f.write("【1. 参数组统计】\n")
+            f.write(
+                "| 组 | 算法 | 参数 | 重复 | 合法 | 平均目标值 | 平均总成本 | 平均满容率 | 平均耗时 |\n"
             )
-            f.write(header + "\n")
-            f.write("|" + "---| " * 9 + "|\n")
-
-            for result in results:
-                if not result.get("isValid", False):
-                    status = "INVALID"
-                elif result == bestValidResult:
-                    status = "BEST"
-                else:
-                    status = ""
-
-                algorithmInfo = result["algorithmParams"]
-                algorithmType = algorithmInfo.get("algorithmType", "unknown")
-                paramSummary = formatAlgorithmParams(
-                    algorithmType,
-                    algorithmInfo.get("params", {})
+            f.write("|---| ---| ---| ---| ---| ---| ---| ---| ---|\n")
+            for row in groupRows:
+                f.write(
+                    f"| {row['combinationIndex']} | {row['algorithmType']} | {row['algorithmParams']} | "
+                    f"{row['repeatCount']} | {row['validCount']}/{row['repeatCount']} | "
+                    f"{self._formatFloat(row['avgObjectiveValue'])} | "
+                    f"{self._formatFloat(row['avgTotalCost'])} | "
+                    f"{self._formatPercent(row['avgFillRate'])} | "
+                    f"{self._formatFloat(row['avgExecutionTime'])}s |\n"
                 )
-                validLabel = "valid" if result.get("isValid", False) else "invalid"
-                line = (
-                    f"| {result['testIndex']:^4} | {algorithmType:<19} | {paramSummary} | "
-                    f"{validLabel:^7} | {result['volumeRate']:>9.2%} | "
-                    f"{result['weightRate']:>9.2%} | "
-                    f"{result['placedCount']:>3}/{len(result['items']):<3} | "
-                    f"{result['executionTime']:>7.3f}s | {status:^7} |"
-                )
-                f.write(line + "\n")
             f.write("\n")
 
-            f.write("【2. 算法执行详情】\n")
-            for result in results:
-                algorithmInfo = result["algorithmParams"]
-                algorithmType = algorithmInfo.get("algorithmType", "unknown")
-                paramSummary = formatAlgorithmParams(
-                    algorithmType,
-                    algorithmInfo.get("params", {})
-                )
-                seedMode = "time-based" if algorithmInfo.get("useTimeSeed", True) else "fixed"
-
+            f.write("【2. 单次运行明细】\n")
+            for row in tables["run"]:
                 f.write(
-                    f">> 组合 {result['testIndex']}/{result['totalTests']} "
-                    f"[{algorithmType}]\n"
+                    f">> 运行 {row['runIndex']} | 组 {row['combinationIndex']} | "
+                    f"{row['algorithmType']} | 目标={row['objectiveValue']} | "
+                    f"成本={row['totalCost']:.3f} | 满容率={row['volumeRate']:.2%} | "
+                    f"已装={row['placedCount']} | 未装={row['unpackedCount']} | "
+                    f"容器数={row['usedContainerCount']} | "
+                    f"耗时={row['executionTime']:.3f}s | "
+                    f"{'VALID' if row['isValid'] else 'INVALID'}"
                 )
+                if row["isCached"]:
+                    f.write(" | CACHED")
+                f.write("\n")
+            f.write("\n")
 
-                container = result["container"]
+            f.write("【3. 结论】\n")
+            if bestValidResult is not None:
                 f.write(
-                    f"   容器: {container.L}x{container.W}x{container.H}, "
-                    f"最大载重={container.maxWeight}\n"
+                    f"最优合法方案: 组 {bestValidResult['combinationIndex']} / "
+                    f"重复 {bestValidResult['repeatIndex']}\n"
                 )
-                f.write(f"   参数: {paramSummary}\n")
-                f.write(f"   Seed: {algorithmInfo.get('seed')} ({seedMode})\n")
-                f.write(
-                    f"   结果: 空间={result['volumeRate']:.2%}, "
-                    f"重量={result['weightRate']:.2%}, "
-                    f"耗时={result['executionTime']:.3f}s\n"
-                )
-                f.write(
-                    f"   合法性: {'VALID' if result.get('isValid', False) else 'INVALID'}\n"
-                )
-
-                if result.get("isCached"):
-                    f.write("   状态: 从缓存加载\n")
-
-                if not result.get("isValid", False):
-                    for error in result.get("validationErrors", []):
-                        f.write(f"   校验错误: {error}\n")
-
-                if self.outputConfig.get("showPlacementText", True) and self.outputConfig.get("saveDetailedLog", False):
-                    f.write("   放置序列(前10个): ")
-                    placementSummary = "; ".join(
-                        [f"{itemId}" for itemId, *_ in result["solution"].placedItems[:10]]
-                    )
-                    f.write(f"{placementSummary}...\n")
-
-                f.write("-" * 40 + "\n")
-
-            if bestValidResult:
-                bestAlgorithm = bestValidResult["algorithmParams"].get("algorithmType", "unknown")
-                bestParams = formatAlgorithmParams(
-                    bestAlgorithm,
-                    bestValidResult["algorithmParams"].get("params", {})
-                )
-                f.write("\n【3. 测试结论】\n")
-                f.write(f"本次测试中表现最优的合法算法是: {bestAlgorithm}\n")
-                f.write(f"最高空间利用率达到: {bestValidResult['volumeRate']:.2%}\n")
-                f.write(f"最优参数: {bestParams}\n")
+                f.write(f"算法: {bestValidResult['algorithmParams']['algorithmType']}\n")
+                f.write(f"目标值: {bestValidResult['objectiveValue']}\n")
+                f.write(f"总成本: {bestValidResult['totalCost']}\n")
+                f.write(f"总满容率: {bestValidResult['volumeRate']:.2%}\n")
+                f.write(f"已用容器数: {bestValidResult['usedContainerCount']}\n")
             else:
-                f.write("\n【3. 测试结论】\n")
-                f.write("本次测试中没有找到合法解。\n")
+                f.write("没有找到合法方案。\n")
 
             f.write("\n" + "=" * 80 + "\n")
 
-        logger.info(f"对比报告已生成: {absResultFile}")
+        logger.info(f"对比报告已生成: {reportPath}")
+        self._writeAnalysisExports(testFolder, timestamp, tables)
 
         if solutionTextResults:
             logger.info(
@@ -280,4 +432,8 @@ class ResultSaver:
                 isBestOverall=(result == bestValidResult)
             )
 
-        return absResultFile
+        return {
+            "reportPath": reportPath,
+            "tables": tables,
+            "bestValidResult": bestValidResult
+        }
