@@ -1,6 +1,10 @@
+import argparse
 import csv
+import copy
+import fnmatch
 import json
 import os
+import subprocess
 from datetime import datetime
 from typing import Any, Dict, List
 from configManager import ConfigManager
@@ -8,6 +12,7 @@ from logger import get_logger, setup_logging
 from resultSaver import ResultSaver
 from testCaseManager import TestCaseManager
 from testRunner import buildCacheIdentity, runTestSuite
+from validation.runner import runValidationSuite
 from visualizer import Visualizer
 
 logger = get_logger("batchTest")
@@ -55,7 +60,143 @@ def _selectVisualizationResults(testCaseResults: List[Dict[str, Any]]) -> List[D
 
     return sorted(bestByAlgorithm.values(), key=lambda result: result["combinationIndex"])
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="装箱实验批量测试程序")
+    parser.add_argument("--case", action="append", dest="cases", help="只运行指定测试集，可重复传入")
+    parser.add_argument("--case-pattern", action="append", dest="case_patterns", help="按通配符匹配测试集")
+    parser.add_argument("--algorithm", help="只运行指定算法")
+    parser.add_argument("--iterations", type=int, help="覆盖算法迭代次数")
+    parser.add_argument("--repeat", type=int, help="覆盖重复次数")
+    parser.add_argument("--no-viz", action="store_true", help="关闭可视化")
+    parser.add_argument("--no-cache", action="store_true", help="关闭缓存")
+    parser.add_argument("--output-tag", help="结果目录追加标签")
+    parser.add_argument("--run-validation", action="store_true", help="先运行功能验证套件")
+    parser.add_argument("--validation-only", action="store_true", help="只运行功能验证套件")
+    return parser.parse_args()
+
+def _filter_test_cases(
+    testCases: List[Dict[str, Any]],
+    args: argparse.Namespace
+) -> List[Dict[str, Any]]:
+    selected = testCases
+    if args.cases:
+        allowed = set(args.cases)
+        selected = [testCase for testCase in selected if testCase["name"] in allowed]
+    if args.case_patterns:
+        selected = [
+            testCase for testCase in selected
+            if any(fnmatch.fnmatch(testCase["name"], pattern) for pattern in args.case_patterns)
+        ]
+    return selected
+
+def _override_algorithm_config(
+    algorithmConfig: Dict[str, Any],
+    args: argparse.Namespace
+) -> Dict[str, Any]:
+    updated = dict(algorithmConfig)
+    if args.iterations is not None:
+        updated["iterations"] = args.iterations
+    if args.repeat is not None:
+        updated["repeatCount"] = args.repeat
+    return updated
+
+def _apply_runtime_overrides(
+    config: Dict[str, Any],
+    testCases: List[Dict[str, Any]],
+    args: argparse.Namespace
+) -> Dict[str, Any]:
+    overridden = copy.deepcopy(config)
+    if args.no_viz:
+        overridden["output"]["enableVisualization"] = False
+    if args.no_cache:
+        overridden["output"]["enableCache"] = False
+
+    if args.algorithm:
+        selectedAlgorithm = args.algorithm
+        defaultAlgorithms = overridden.get("algorithmDefaults", {})
+        if selectedAlgorithm not in defaultAlgorithms:
+            raise ValueError(f"未知算法: {selectedAlgorithm}")
+        overridden["algorithmDefaults"] = {
+            selectedAlgorithm: _override_algorithm_config(
+                defaultAlgorithms[selectedAlgorithm],
+                args
+            )
+        }
+        for testCase in testCases:
+            caseAlgorithms = testCase.get("algorithmParams", {})
+            if caseAlgorithms:
+                filtered = {
+                    selectedAlgorithm: _override_algorithm_config(
+                        caseAlgorithms.get(selectedAlgorithm, defaultAlgorithms[selectedAlgorithm]),
+                        args
+                    )
+                }
+                testCase["algorithmParams"] = filtered
+    elif args.iterations is not None or args.repeat is not None:
+        overridden["algorithmDefaults"] = {
+            algorithmType: _override_algorithm_config(algorithmConfig, args)
+            for algorithmType, algorithmConfig in overridden.get("algorithmDefaults", {}).items()
+        }
+        for testCase in testCases:
+            if testCase.get("algorithmParams"):
+                testCase["algorithmParams"] = {
+                    algorithmType: _override_algorithm_config(algorithmConfig, args)
+                    for algorithmType, algorithmConfig in testCase["algorithmParams"].items()
+                }
+
+    return overridden
+
+def _build_output_root(scriptDir: str, config: Dict[str, Any], args: argparse.Namespace) -> str:
+    baseResultsDir = config.get("output", {}).get("resultsDir", "results")
+    runTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if args.output_tag:
+        runTimestamp = f"{runTimestamp}_{args.output_tag}"
+    return os.path.join(scriptDir, baseResultsDir, runTimestamp)
+
+def _write_manifest(path: str, manifest: Dict[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+def _write_summary(path: str, manifest: Dict[str, Any]) -> None:
+    lines = [
+        f"# Run Summary",
+        f"- CreatedAt: {manifest['createdAt']}",
+        f"- GitBranch: {manifest.get('gitBranch', 'unknown')}",
+        f"- GitCommit: {manifest.get('gitCommit', 'unknown')}",
+        f"- CaseCount: {manifest['caseCount']}",
+        f"- TotalCombinationCount: {manifest['totalCombinationCount']}",
+        f"- TotalRunCount: {manifest['totalRunCount']}",
+        f"- PackingVisualizationCount: {manifest['packingVisualizationCount']}",
+        f"- AnalysisVisualizationCount: {manifest['analysisVisualizationCount']}",
+        f"- ValidationPassed: {manifest['validation'].get('passed') if manifest.get('validation') else 'not-run'}",
+        "",
+        "## Cases"
+    ]
+    for caseName in manifest["cases"]:
+        lines.append(f"- {caseName}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+def _get_git_metadata(scriptDir: str) -> Dict[str, str]:
+    try:
+        branch = subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            cwd=scriptDir,
+            text=True,
+            encoding="utf-8"
+        ).strip()
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=scriptDir,
+            text=True,
+            encoding="utf-8"
+        ).strip()
+        return {"gitBranch": branch, "gitCommit": commit}
+    except Exception:
+        return {"gitBranch": "unknown", "gitCommit": "unknown"}
+
 def main() -> None:
+    args = _parse_args()
     setup_logging(log_level="INFO")
     logger.info("=" * 80)
     logger.info("装箱实验批量测试程序")
@@ -65,20 +206,20 @@ def main() -> None:
     configManager = ConfigManager(configPath=scriptDir)
     testCaseManager = TestCaseManager(testPath=scriptDir)
 
-    config = configManager.getConfig()
+    baseConfig = configManager.getConfig()
     testCases = testCaseManager.loadTestCases()
-    if not testCases:
-        logger.error("未找到测试用例，请在 test 目录下添加 JSON 文件")
-        return
+    testCases = _filter_test_cases(testCases, args)
+
+    config = _apply_runtime_overrides(baseConfig, testCases, args)
 
     defaultParams = configManager.getDefaultParams()
     outputConfig = configManager.getOutputConfig()
+    defaultParams = config.get("algorithmDefaults", defaultParams)
+    outputConfig = config.get("output", outputConfig)
     cacheIdentity = buildCacheIdentity(config)
     loggingConfig = outputConfig.get("logging", {})
-    baseResultsDir = outputConfig.get("resultsDir", "results")
 
-    runTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    topLevelDir = os.path.join(scriptDir, baseResultsDir, runTimestamp)
+    topLevelDir = _build_output_root(scriptDir, config, args)
     os.makedirs(topLevelDir, exist_ok=True)
     logsDir = os.path.join(topLevelDir, "logs")
     aggregateCsvDir = os.path.join(topLevelDir, "aggregate", "tables", "csv")
@@ -101,6 +242,36 @@ def main() -> None:
             f"缓存版本: {cacheIdentity['cacheVersion']}, "
             f"代码指纹: {cacheIdentity['codeFingerprint'][:12]}"
         )
+
+    validationSummary = None
+    validationConfig = config.get("validation", {})
+    shouldRunValidation = (
+        args.run_validation or
+        args.validation_only or
+        (
+            validationConfig.get("enableValidationSuite", False)
+            and validationConfig.get("runBeforeBatch", False)
+        )
+    )
+    if shouldRunValidation:
+        validationSummary = runValidationSuite(
+            scriptDir=scriptDir,
+            config=config,
+            outputDir=topLevelDir
+        )
+        if args.validation_only:
+            return
+        if (
+            validationSummary["enabled"]
+            and not validationSummary["passed"]
+            and config.get("validation", {}).get("stopOnValidationFailure", True)
+        ):
+            logger.error("功能验证套件失败，按配置终止正式批量运行")
+            return
+
+    if not testCases:
+        logger.error("未找到测试用例，请在 test 目录下添加 JSON 文件")
+        return
 
     resultSaver = ResultSaver(resultsDir=topLevelDir, outputConfig=outputConfig)
     visualizer = Visualizer(resultsDir=topLevelDir, outputConfig=outputConfig)
@@ -172,6 +343,22 @@ def main() -> None:
     logger.info(f"  分析图文件数: {analysisVisualizationCount}")
     logger.info(f"  结果保存目录: {os.path.abspath(topLevelDir)}")
     logger.info("=" * 80)
+
+    manifest = {
+        "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "resultsDir": os.path.abspath(topLevelDir),
+        "caseCount": len(testCases),
+        "cases": [testCase["name"] for testCase in testCases],
+        "runtimeArgs": vars(args),
+        "validation": validationSummary,
+        "totalCombinationCount": totalCombinationCount,
+        "totalRunCount": totalRunCount,
+        "packingVisualizationCount": packingVisualizationCount,
+        "analysisVisualizationCount": analysisVisualizationCount
+    }
+    manifest.update(_get_git_metadata(scriptDir))
+    _write_manifest(os.path.join(topLevelDir, "manifest.json"), manifest)
+    _write_summary(os.path.join(topLevelDir, "summary.md"), manifest)
 
 if __name__ == "__main__":
     main()

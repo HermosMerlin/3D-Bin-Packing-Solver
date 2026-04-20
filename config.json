@@ -24,6 +24,13 @@
       "repeatCount": 1
     }
   },
+  "validation": {
+    "enableValidationSuite": false,
+    "runBeforeBatch": false,
+    "stopOnValidationFailure": true,
+    "casesDir": "validation/cases",
+    "exportValidationSummary": true
+  },
   "output": {
     "resultsDir": "results",
     "cacheDir": "cache",

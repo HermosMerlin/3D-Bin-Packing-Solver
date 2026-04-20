@@ -59,7 +59,19 @@
 - 顶层结果目录会生成跨测试用例总表和聚合分析图
 
 最新一次验证结果目录为：
-- `results/20260420_194612/`
+- `results/20260420_201620/`
+
+当前输出目录已经按用途分层：
+- `logs/`
+- `cases/<testName>/reports`
+- `cases/<testName>/tables/csv`
+- `cases/<testName>/tables/json`
+- `cases/<testName>/plans`
+- `cases/<testName>/visuals/packing`
+- `cases/<testName>/visuals/analysis`
+- `aggregate/tables/csv`
+- `aggregate/tables/json`
+- `aggregate/visuals/analysis`
 
 ## 新增需求
 
@@ -549,3 +561,72 @@
    - 组间统计比较
 4. 最后完善研究型测试集
    按“容器固定 / 货物变化 / 标签比例变化 / 成本变化”系统扩样，形成更完整的实验矩阵。
+
+## 本轮最后一次框架提升已完成
+本轮又完成了一次偏“框架层”而非“算法层”的提升，新增内容如下：
+
+1. 独立功能验证套件
+   当前已经有：
+   - `validation/cases/`
+   - `validation/runner.py`
+   - `validationExpect`
+   - `validation/summary.json`
+   - `validation/summary.txt`
+
+2. CLI 运行控制
+   当前已经支持：
+   - `--case`
+   - `--case-pattern`
+   - `--algorithm`
+   - `--iterations`
+   - `--repeat`
+   - `--no-viz`
+   - `--no-cache`
+   - `--output-tag`
+   - `--run-validation`
+   - `--validation-only`
+
+3. schema 合同层
+   当前测试集已经正式要求：
+   - `schemaVersion`
+   - `units`
+
+   并且当前实现固定要求：
+   - `lengthUnit = cm`
+   - `weightUnit = kg`
+   - `bearingPressureUnit = kg/m^2`
+   - `clearanceUnit = cm`
+
+4. 结果入口文件
+   当前每次运行根目录都会生成：
+   - `manifest.json`
+   - `summary.md`
+
+5. 分析图配置增强
+   当前分析图除了基础散点图以外，还支持更多配置字段：
+   - `filter`
+   - `series`
+   - `chartType`
+   - `sortBy`
+   - `sortOrder`
+   - `topN`
+
+## 最新补充验证
+这轮补充验证已经完成：
+
+- `python batchTest.py --validation-only --output-tag validation_only`
+  验证套件 6 个用例全部通过
+- `python batchTest.py --case single_fill_standard --algorithm greedy_search --iterations 1 --repeat 1 --no-viz --output-tag cli_smoke`
+  CLI 覆盖、schema 校验、manifest、结果导出全部正常
+
+对应结果目录为：
+- `results/20260420_220041_validation_only/`
+- `results/20260420_220042_cli_smoke/`
+
+## 剩余框架缺口
+如果继续只看框架、不看算法强弱，剩余缺口主要还有：
+
+1. 验证样例集数量还不够多
+2. 图表类型还不够丰富，缺少分面图、回归线、统计图
+3. 标签体系还没有彻底外部化成独立配置资源
+4. 运行级 manifest 还可以继续补充 git 信息和更详细的结果索引

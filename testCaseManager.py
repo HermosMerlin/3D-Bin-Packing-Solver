@@ -20,6 +20,13 @@ DEFAULT_BASE_SEED = 42
 DEFAULT_REPEAT_COUNT = 1
 CONTROL_CONFIG_KEYS = {"useTimeSeed", "baseSeed", "repeatCount"}
 PRIMARY_TAGS = {"standard", "fragile", "oriented"}
+SUPPORTED_SCHEMA_VERSION = 2
+REQUIRED_UNITS = {
+    "lengthUnit": "cm",
+    "weightUnit": "kg",
+    "bearingPressureUnit": "kg/m^2",
+    "clearanceUnit": "cm"
+}
 
 TAG_CONSTRAINT_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "standard": {
@@ -278,6 +285,35 @@ class TestCaseManager:
 
         return True
 
+    def _validate_schema_contract(
+        self,
+        testCase: Dict[str, Any],
+        filename: str
+    ) -> bool:
+        schemaVersion = testCase.get("schemaVersion")
+        if schemaVersion != SUPPORTED_SCHEMA_VERSION:
+            logger.error(
+                f"测试用例 {filename} 的 schemaVersion={schemaVersion} 不受支持，"
+                f"当前仅支持 {SUPPORTED_SCHEMA_VERSION}"
+            )
+            return False
+
+        units = testCase.get("units")
+        if not isinstance(units, dict):
+            logger.error(f"测试用例 {filename} 缺少 'units' 定义")
+            return False
+
+        for key, expectedValue in REQUIRED_UNITS.items():
+            actualValue = units.get(key)
+            if actualValue != expectedValue:
+                logger.error(
+                    f"测试用例 {filename} 的 units.{key}={actualValue} 不合法，"
+                    f"当前要求 {expectedValue}"
+                )
+                return False
+
+        return True
+
     def _validate_item_types(
         self,
         testCase: Dict[str, Any],
@@ -334,6 +370,8 @@ class TestCaseManager:
 
     def validateTestCase(self, testCase: Dict[str, Any], filename: str) -> bool:
         try:
+            if not self._validate_schema_contract(testCase, filename):
+                return False
             if not self._validate_container_types(testCase, filename):
                 return False
             if not self._validate_item_types(testCase, filename):
@@ -456,6 +494,8 @@ class TestCaseManager:
 
         return ProblemInstance(
             name=str(testCase["name"]),
+            schemaVersion=int(testCase["schemaVersion"]),
+            units=dict(testCase["units"]),
             containerTypes=containerTypes,
             itemTypes=itemTypes,
             items=items,

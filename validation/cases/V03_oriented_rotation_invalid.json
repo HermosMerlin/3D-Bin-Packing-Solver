@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 2,
+  "units": {
+    "lengthUnit": "cm",
+    "weightUnit": "kg",
+    "bearingPressureUnit": "kg/m^2",
+    "clearanceUnit": "cm"
+  },
+  "containerTypes": [
+    {
+      "typeId": "box",
+      "L": 100,
+      "W": 80,
+      "H": 80,
+      "maxWeight": 1000,
+      "tripCost": 100
+    }
+  ],
+  "itemTypes": [
+    {
+      "typeId": "upright",
+      "l": 30,
+      "w": 20,
+      "h": 50,
+      "weight": 20,
+      "count": 1,
+      "tags": ["oriented"]
+    }
+  ],
+  "globalConstraints": {
+    "orthogonalOnly": true,
+    "allowCompression": false,
+    "allowSplit": false,
+    "minTopClearanceCm": 3,
+    "maxBearingPressureKgPerM2": 500
+  },
+  "objective": {
+    "name": "max_fill_rate",
+    "primaryMetric": "totalFillRate",
+    "primaryOrder": "max"
+  },
+  "validationExpect": {
+    "schemaShouldPass": true,
+    "planShouldBeValid": false,
+    "expectedErrorContains": ["rotation_not_allowed"]
+  },
+  "validationPlan": {
+    "containerLoads": [
+      {
+        "container": {
+          "instanceId": "box_001",
+          "containerTypeId": "box",
+          "L": 100,
+          "W": 80,
+          "H": 80,
+          "maxWeight": 1000,
+          "tripCost": 100
+        },
+        "placements": [
+          {
+            "itemId": 1,
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "rotation": 1
+          }
+        ],
+        "totalVolume": 30000,
+        "totalWeight": 20,
+        "fillRate": 0.046875,
+        "weightRate": 0.02
+      }
+    ],
+    "unpackedItemIds": [],
+    "metrics": {}
+  }
+}

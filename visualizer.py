@@ -22,6 +22,45 @@ class Visualizer:
         return os.path.join(self.resultsDir, "aggregate", "visuals", "analysis")
 
     @staticmethod
+    def _apply_filters(
+        rows: List[Dict[str, Any]],
+        filters: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        if not filters:
+            return rows
+        filteredRows = rows
+        for key, expected in filters.items():
+            if isinstance(expected, list):
+                allowed = set(expected)
+                filteredRows = [
+                    row for row in filteredRows
+                    if row.get(key) in allowed
+                ]
+            else:
+                filteredRows = [
+                    row for row in filteredRows
+                    if row.get(key) == expected
+                ]
+        return filteredRows
+
+    @staticmethod
+    def _apply_sort_and_topn(
+        rows: List[Dict[str, Any]],
+        sortBy: Optional[str],
+        sortOrder: str,
+        topN: Optional[int]
+    ) -> List[Dict[str, Any]]:
+        processedRows = list(rows)
+        if sortBy:
+            processedRows.sort(
+                key=lambda row: (row.get(sortBy) is None, row.get(sortBy)),
+                reverse=(sortOrder.lower() == "desc")
+            )
+        if topN is not None and topN > 0:
+            processedRows = processedRows[:topN]
+        return processedRows
+
+    @staticmethod
     def _box_mesh(
         x: float,
         y: float,
@@ -211,43 +250,80 @@ class Visualizer:
             xField = spec.get("x")
             yField = spec.get("y")
             colorField = spec.get("color")
+            seriesField = spec.get("series")
+            chartType = str(spec.get("chartType", "scatter")).lower()
+            filters = spec.get("filter")
+            sortBy = spec.get("sortBy")
+            sortOrder = str(spec.get("sortOrder", "desc"))
+            topN = spec.get("topN")
             title = spec.get("title", f"{level}: {xField} vs {yField}")
             rows = tables.get(level, [])
             if not rows or not xField or not yField:
                 continue
 
+            filteredRows = self._apply_filters(rows, filters)
             filteredRows = [
-                row for row in rows
+                row for row in filteredRows
                 if row.get(xField) is not None and row.get(yField) is not None
             ]
+            filteredRows = self._apply_sort_and_topn(
+                filteredRows,
+                sortBy=sortBy,
+                sortOrder=sortOrder,
+                topN=topN if isinstance(topN, int) else None
+            )
             if not filteredRows:
                 continue
 
-            markerColors = (
-                [row.get(colorField) for row in filteredRows]
-                if colorField else "rgb(84, 168, 139)"
-            )
-            figure = go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[row.get(xField) for row in filteredRows],
-                        y=[row.get(yField) for row in filteredRows],
-                        mode="markers",
-                        marker=dict(
-                            size=10,
-                            color=markerColors,
-                            showscale=False
-                        ),
-                        text=[
-                            f"test={row.get('testName')}<br>"
-                            f"algorithm={row.get('algorithmType')}<br>"
-                            f"group={row.get('combinationIndex')}"
-                            for row in filteredRows
-                        ],
-                        hoverinfo="text"
-                    )
+            figure = go.Figure()
+            if seriesField:
+                groupedRows: Dict[str, List[Dict[str, Any]]] = {}
+                for row in filteredRows:
+                    groupKey = str(row.get(seriesField, "unknown"))
+                    groupedRows.setdefault(groupKey, []).append(row)
+            else:
+                groupedRows = {"all": filteredRows}
+
+            for seriesName, seriesRows in groupedRows.items():
+                hoverText = [
+                    f"test={row.get('testName')}<br>"
+                    f"algorithm={row.get('algorithmType')}<br>"
+                    f"group={row.get('combinationIndex')}"
+                    for row in seriesRows
                 ]
-            )
+                if chartType == "box":
+                    figure.add_trace(
+                        go.Box(
+                            x=[row.get(xField) for row in seriesRows],
+                            y=[row.get(yField) for row in seriesRows],
+                            name=seriesName,
+                            boxpoints="all",
+                            jitter=0.4,
+                            pointpos=-1.8,
+                            text=hoverText,
+                            hoverinfo="text"
+                        )
+                    )
+                else:
+                    markerColors = (
+                        [row.get(colorField) for row in seriesRows]
+                        if colorField and not seriesField else "rgb(84, 168, 139)"
+                    )
+                    figure.add_trace(
+                        go.Scatter(
+                            x=[row.get(xField) for row in seriesRows],
+                            y=[row.get(yField) for row in seriesRows],
+                            mode="markers",
+                            name=seriesName if seriesField else None,
+                            marker=dict(
+                                size=10,
+                                color=markerColors,
+                                showscale=False
+                            ),
+                            text=hoverText,
+                            hoverinfo="text"
+                        )
+                    )
             figure.update_layout(
                 title=title,
                 xaxis_title=xField,

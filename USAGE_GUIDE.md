@@ -1,40 +1,43 @@
 # 使用手册
 
 ## 1. 先看整体
-这套框架现在做两类问题：
+这套框架现在主要做两类问题：
 
 - 单容器满容率优化
 - 多容器最低总成本优化
 
-主流程很简单：
+主流程：
 
-1. 在 `test/` 里写测试集
-2. 在 `config.json` 里改算法参数和输出设置
-3. 运行：
-
-```powershell
-python batchTest.py
-```
-
+1. 在 `test/` 写测试集
+2. 在 `config.json` 改默认参数
+3. 运行 `python batchTest.py`
 4. 去 `results/<时间戳>/` 看报告、表格和图
-   现在输出已经按 `logs / cases / aggregate` 分层，不会再把所有文件堆在一起。
+
+输出已经按 `logs / cases / aggregate / validation` 分层，不会再把所有文件堆在一起。
 
 ## 2. 主要改哪几个文件
 
 - `test/*.json`
-  每个文件是一组实验条件。大多数情况下，先改这里。
+  正式实验集。最常改这里。
 - `config.json`
-  改算法默认参数、重复次数、缓存、分析图。
+  算法默认参数、缓存、可视化、验证套件开关。
+- `validation/cases/*.json`
+  最小功能验证样例。平时可以不跑，调试框架时用。
 - `problem.md`
-  看当前框架状态、已完成内容和下一步计划。
+  当前进度、设计思路和下一步计划。
 
-如果只是跑实验，通常不需要先改代码。
-
-## 3. 测试集结构
-一个测试集最常用的字段是：
+## 3. 测试集 schema
+正式测试集最少包含这些字段：
 
 ```json
 {
+  "schemaVersion": 2,
+  "units": {
+    "lengthUnit": "cm",
+    "weightUnit": "kg",
+    "bearingPressureUnit": "kg/m^2",
+    "clearanceUnit": "cm"
+  },
   "containerTypes": [],
   "itemTypes": [],
   "globalConstraints": {},
@@ -44,7 +47,28 @@ python batchTest.py
 }
 ```
 
-### 3.1 `containerTypes`
+### 3.1 `schemaVersion`
+当前固定写：
+
+```json
+"schemaVersion": 2
+```
+
+### 3.2 `units`
+当前单位约定固定写：
+
+```json
+"units": {
+  "lengthUnit": "cm",
+  "weightUnit": "kg",
+  "bearingPressureUnit": "kg/m^2",
+  "clearanceUnit": "cm"
+}
+```
+
+这套框架当前就是按这组单位实现的，不建议改。
+
+### 3.3 `containerTypes`
 写可用容器类型。
 
 示例：
@@ -70,25 +94,20 @@ python batchTest.py
 ]
 ```
 
-字段含义：
+字段：
 
 - `typeId`
-  容器类型名，自己取，别重复。
-- `L/W/H`
-  长宽高。
+- `L / W / H`
 - `maxWeight`
-  最大载重。
 - `tripCost`
-  单个容器单趟成本。
-- `maxInstances`
-  可选。限制这种容器最多能用几个。
+- `maxInstances` 可选
 
 怎么用：
 
-- 研究单箱装满：通常只写 1 种容器
-- 研究最低成本：通常写 2 种或以上容器，并给不同 `tripCost`
+- 单箱满容：通常只写 1 种容器
+- 成本优化：通常写 2 种或以上容器，并给不同 `tripCost`
 
-### 3.2 `itemTypes`
+### 3.4 `itemTypes`
 写货物种类。
 
 示例：
@@ -116,18 +135,13 @@ python batchTest.py
 ]
 ```
 
-字段含义：
+字段：
 
 - `typeId`
-  货物类型名，别重复。
-- `l/w/h`
-  长宽高。
+- `l / w / h`
 - `weight`
-  单件重量。
 - `count`
-  件数。
 - `tags`
-  货物标签。
 
 当前常用标签：
 
@@ -138,7 +152,7 @@ python batchTest.py
 - `oriented`
   定向件，只允许一种姿态，可堆叠，但上层重心不能超出其投影。
 
-### 3.3 `globalConstraints`
+### 3.5 `globalConstraints`
 写全局约束。
 
 示例：
@@ -153,23 +167,18 @@ python batchTest.py
 }
 ```
 
-常用字段：
+最常用字段：
 
 - `orthogonalOnly`
-  是否只允许正交摆放。通常保持 `true`。
 - `allowCompression`
-  是否允许挤压。通常 `false`。
 - `allowSplit`
-  是否允许拆分。通常 `false`。
 - `minTopClearanceCm`
-  顶部安全间隙。
 - `maxBearingPressureKgPerM2`
-  承压上限。
 
-### 3.4 `objective`
+### 3.6 `objective`
 写优化目标。
 
-#### 目标一：满容率优先
+满容率优先：
 
 ```json
 "objective": {
@@ -183,7 +192,7 @@ python batchTest.py
 }
 ```
 
-#### 目标二：总成本优先
+总成本优先：
 
 ```json
 "objective": {
@@ -206,8 +215,8 @@ python batchTest.py
 - `usedContainerCount`
 - `avgContainerFillRate`
 
-### 3.5 `analysis`
-写单个测试集的分析图。
+### 3.7 `analysis`
+写单个测试集自己的分析图。
 
 示例：
 
@@ -224,31 +233,24 @@ python batchTest.py
 }
 ```
 
-最常改的是：
+当前支持的常用配置：
 
 - `level`
-  画哪一层表。常用：
-  - `run`
-  - `group`
-  - `container`
+  `run / group / container / placement`
 - `x`
-  横轴字段。
 - `y`
-  纵轴字段。
 - `title`
-  图标题。
 - `color`
-  可选，上色字段。
+- `series`
+- `chartType`
+  目前常用 `scatter`、`box`
+- `filter`
+- `sortBy`
+- `sortOrder`
+- `topN`
 
-常用例子：
-
-- `iterations -> avgFillRate`
-- `itemTypeCount -> avgFillRate`
-- `containerAspectRatio -> avgFillRate`
-- `avgTotalCost -> avgFillRate`
-
-### 3.6 `scenarioMetadata`
-写场景标签，方便后续筛选和画图。
+### 3.8 `scenarioMetadata`
+写场景标签，方便后续筛选。
 
 示例：
 
@@ -264,213 +266,216 @@ python batchTest.py
 - `scenarioTag`
 - `studyGroup`
 
-## 4. `config.json` 怎么改
+## 4. `config.json` 常改项
 
 ## 4.1 算法默认参数
-最常改的是 `algorithmDefaults`。
+在 `algorithmDefaults` 里改。
 
 示例：
 
 ```json
-"algorithmDefaults": {
-  "greedy_search": {
-    "iterations": {
-      "min": 20,
-      "max": 40,
-      "step": 20
-    },
-    "useTimeSeed": false,
-    "baseSeed": 42,
-    "repeatCount": 1
-  }
+"greedy_search": {
+  "iterations": {
+    "min": 20,
+    "max": 40,
+    "step": 20
+  },
+  "useTimeSeed": false,
+  "baseSeed": 42,
+  "repeatCount": 1
 }
 ```
 
-### 常用参数
+最常改：
 
-#### `iterations`
-算法迭代次数。
-
-如果写成范围：
-
-```json
-"iterations": {
-  "min": 20,
-  "max": 100,
-  "step": 20
-}
-```
-
-就会自动跑：
-- 20
-- 40
-- 60
-- 80
-- 100
-
-适合做“迭代数影响结果”的实验。
-
-#### `repeatCount`
-每组参数重复跑几次。
-
-```json
-"repeatCount": 3
-```
-
-适合做均值和波动统计。
-
-#### `baseSeed`
-固定随机种子起点。
-
-```json
-"baseSeed": 42
-```
-
-#### `useTimeSeed`
-是否用时间随机种子。
-
-- `false`
-  结果可复现
-- `true`
-  每次更随机
-
-正式实验一般优先 `false`。
-
-## 4.2 当前可选算法
-
-### `greedy_search`
-特点：
-- 快
-- 适合基础对比
-- 适合先试
-
-主要参数：
 - `iterations`
+  迭代次数。可写固定值，也可写范围。
+- `repeatCount`
+  每组参数重复次数。
+- `baseSeed`
+  固定随机种子起点。
+- `useTimeSeed`
+  是否用时间种子。正式实验建议 `false`。
 
-### `simulated_annealing`
-特点：
-- 搜索更灵活
-- 运行更慢一些
-- 更适合后续深入比较
+当前算法：
 
-主要参数：
-- `iterations`
+- `greedy_search`
+- `simulated_annealing`
+
+退火额外参数：
+
 - `initialTemp`
 - `coolingRate`
 - `minTemp`
 
-参数直观理解：
+## 4.2 验证套件开关
+在 `validation` 段里改。
 
-- `initialTemp`
-  一开始搜索有多“敢跳”。
-- `coolingRate`
-  降温速度。越接近 1，降温越慢。
-- `minTemp`
-  降到多低就停。
+示例：
+
+```json
+"validation": {
+  "enableValidationSuite": false,
+  "runBeforeBatch": false,
+  "stopOnValidationFailure": true,
+  "casesDir": "validation/cases",
+  "exportValidationSummary": true
+}
+```
+
+含义：
+
+- `enableValidationSuite`
+  是否启用验证功能。
+- `runBeforeBatch`
+  正式实验前是否先跑验证。
+- `stopOnValidationFailure`
+  验证失败时是否中止正式运行。
+- `casesDir`
+  验证样例目录。
+- `exportValidationSummary`
+  是否导出验证汇总。
 
 ## 4.3 输出配置
-最常改的是这些：
+常用：
 
 - `enableCache`
-  是否启用缓存。通常保持 `true`。
 - `exportSummaryData`
-  是否导出 CSV/JSON。通常保持 `true`。
 - `saveSolutionText`
-  是否导出最优方案文本。推荐 `"only-best"`。
 - `enableVisualization`
-  是否生成图。通常保持 `true`。
 - `analysisCharts`
-  跨测试用例聚合图配置。
 
-示例：
+`analysisCharts` 是跨测试用例聚合图配置，不是单个测试集自己的图。
 
-```json
-"analysisCharts": [
-  {
-    "level": "group",
-    "x": "containerAspectRatio",
-    "y": "avgFillRate",
-    "title": "Container Aspect Ratio vs Avg Fill Rate"
-  }
-]
+## 5. CLI 单独运行
+现在很多调试动作不需要改 `config.json`，可以直接命令行覆盖。
+
+### 只跑一个测试集
+
+```powershell
+python batchTest.py --case question1
 ```
 
-注意：
+### 按通配符跑一批测试集
 
-- 测试集里的 `analysis`
-  只画该测试集自己的图
-- `config.json` 里的 `analysisCharts`
-  画所有测试集合并后的总图
+```powershell
+python batchTest.py --case-pattern "*hard*"
+```
 
-## 5. 输出结果怎么看
+### 只跑一个算法
+
+```powershell
+python batchTest.py --case question1 --algorithm greedy_search
+```
+
+### 临时改迭代次数和重复次数
+
+```powershell
+python batchTest.py --case question1 --algorithm greedy_search --iterations 1 --repeat 1
+```
+
+### 调试时关可视化
+
+```powershell
+python batchTest.py --case question1 --no-viz
+```
+
+### 调试时关缓存
+
+```powershell
+python batchTest.py --case question1 --no-cache
+```
+
+### 给结果目录打标签
+
+```powershell
+python batchTest.py --case question1 --output-tag debug_question1
+```
+
+### 只跑功能验证套件
+
+```powershell
+python batchTest.py --validation-only --output-tag validation_only
+```
+
+### 先跑验证，再跑正式实验
+
+```powershell
+python batchTest.py --run-validation
+```
+
+## 6. 验证套件怎么用
+验证样例单独放在：
+
+```text
+validation/cases/
+```
+
+它的目标不是做正式实验，而是验证：
+
+- schema 能否加载
+- 约束是否按预期生效
+- 非法方案是否能被拦住
+- 输出链路是否正常
+
+验证结果会输出到：
+
+```text
+results/<时间戳>/validation/
+  summary.json
+  summary.txt
+```
+
+## 7. 输出结果怎么看
 每次运行会生成一个时间戳目录：
 
 ```text
 results/<时间戳>/
-```
-
-当前目录结构是：
-
-```text
-results/<时间戳>/
   logs/
-    run.log
   cases/
-    <testName>/
-      reports/
-      tables/
-        csv/
-        json/
-      plans/
-      visuals/
-        packing/
-        analysis/
   aggregate/
-    tables/
-      csv/
-      json/
-    visuals/
-      analysis/
+  validation/
+  manifest.json
+  summary.md
 ```
 
 ### `cases/<testName>/reports/`
 - `results_*.txt`
-  文本报告。先看这个。
+  先看这个。
 
-### `cases/<testName>/tables/csv/` 和 `cases/<testName>/tables/json/`
+### `cases/<testName>/tables/csv|json/`
 - `run_*`
-  每次运行一行。
 - `group_*`
-  每组参数一行，最适合看调参结果。
 - `container_*`
-  每个容器实例一行。
 - `placement_*`
-  每个放置动作一行。
+
+最常看的是 `group_*`。
 
 ### `cases/<testName>/plans/`
 - `plan_best_*.txt`
-  最优方案文本。
 
 ### `cases/<testName>/visuals/packing/`
-- `packing_*.html`
-  装箱三维图。
+- 装箱三维图。
 
 ### `cases/<testName>/visuals/analysis/`
-- `analysis_*.html`
-  该测试集自己的分析图。
+- 该测试集自己的图。
 
-### `aggregate/tables/csv/` 和 `aggregate/tables/json/`
+### `aggregate/tables/csv|json/`
 - `all_run.*`
 - `all_group.*`
 - `all_container.*`
 - `all_placement.*`
 
-这些是所有测试集合并后的总表，适合后续筛选、画图和写论文。
-
 ### `aggregate/visuals/analysis/`
-- 聚合后的总分析图。
+- 跨测试用例聚合图。
 
-## 6. 常见实验怎么配
+### 根目录文件
+- `manifest.json`
+  本次运行的结构化索引。
+- `summary.md`
+  简版运行摘要。
+
+## 8. 常用实验配置
 
 ### 只研究单集装箱满容率
 
@@ -499,67 +504,45 @@ results/<时间戳>/
 }
 ```
 
-如果是成本目标，把 `y` 改成 `avgTotalCost`。
+如果研究成本目标，就把 `y` 改成 `avgTotalCost`。
 
-### 做“容器不变、货物变化”
+## 9. 实际使用建议
 
-- 多个测试集共用同一组 `containerTypes`
-- 只改 `itemTypes`
-- `scenarioTag` 建议写成：
-
-```json
-"scenarioTag": "containerFixed_itemVaried"
-```
-
-### 做“容器变化、货物不变”
-
-- 保持 `itemTypes` 基本不变
-- 改 `containerTypes`
-- `scenarioTag` 建议写成：
-
-```json
-"scenarioTag": "containerVaried_itemFixed"
-```
-
-## 7. 实际使用建议
-
-- 先从小规模测试开始，再扩大。
-- 正式实验先用 `useTimeSeed = false`。
+- 先从小规模 case 开始，再扩大。
+- 正式实验优先 `useTimeSeed = false`。
 - 想快一点就先减：
   - `iterations`
   - `repeatCount`
   - 测试集数量
-- 如果结果不理想，先区分：
-  - 是约束太严，根本装不进去
-  - 还是求解器还不够强
+- 如果先想确认框架没坏，先跑：
 
-优先看这些字段：
-- `unpackedCount`
-- `totalCost`
-- `avgFillRate`
-- `container_*.csv`
-- `placement_*.csv`
+```powershell
+python batchTest.py --validation-only
+```
 
-## 8. 当前局限
-当前框架已经能跑：
-- 多容器
-- 成本目标
-- 第一小问约束
-- 散点图分析
+- 如果结果不理想，先看：
+  - `unpackedCount`
+  - `totalCost`
+  - `avgFillRate`
+  - `container_*.csv`
+  - `placement_*.csv`
 
-但还没完全做好的部分有：
+## 10. 当前局限
+
 - 多容器成本求解质量还只是基础版
 - 图表类型还不够丰富
 - 标签体系还可以继续扩展
 - 更复杂业务约束还没完全接进来
+- 验证样例集目前还不大
 
-## 9. 最实用的用法
-如果只是想尽快开跑实验，建议直接按这个顺序来：
+## 11. 最实用的用法
+平时最推荐的顺序：
 
 1. 复制一个 `test/*.json`
 2. 改容器、货物、目标、分析图
-3. 跑 `python batchTest.py`
-4. 先看 `cases/<testName>/reports/results_*.txt`
-5. 再看 `cases/<testName>/tables/csv/group_*.csv` 和图
+3. 必要时用 CLI 覆盖单次参数
+4. 跑 `python batchTest.py`
+5. 先看 `cases/<testName>/reports/results_*.txt`
+6. 再看 `cases/<testName>/tables/csv/group_*.csv`
 
-这样基本够用，不需要先看全部代码。
+这样已经足够覆盖大多数实验和调试场景。

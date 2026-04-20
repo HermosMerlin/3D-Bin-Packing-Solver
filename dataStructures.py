@@ -459,6 +459,8 @@ class ShipmentPlan:
 @dataclass
 class ProblemInstance:
     name: str
+    schemaVersion: int
+    units: Dict[str, str]
     containerTypes: List[ContainerType]
     itemTypes: List[ItemType]
     items: List[Item]
@@ -467,4 +469,3 @@ class ProblemInstance:
     analysis: Dict[str, Any] = field(default_factory=dict)
     scenarioMetadata: Dict[str, Any] = field(default_factory=dict)
     algorithmParams: Dict[str, Any] = field(default_factory=dict)
-

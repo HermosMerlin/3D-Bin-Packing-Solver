@@ -4,4 +4,5 @@ test/
 *.md
 !problem.md
 !USAGE_GUIDE.md
+!README.md
 cache/
