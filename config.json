@@ -24,6 +24,7 @@
         "resultsDir": "results",
         "cacheDir": "cache",
         "enableCache": true,
+        "cacheVersion": 1,
         "saveDetailedLog": false,
         "showPlacementText": false,
         "enableVisualization": true,

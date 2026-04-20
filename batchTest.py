@@ -5,7 +5,7 @@ from configManager import ConfigManager
 from testCaseManager import TestCaseManager
 from resultSaver import ResultSaver
 from visualizer import Visualizer
-from testRunner import runTestSuite
+from testRunner import runTestSuite, buildCacheIdentity
 from logger import setup_logging, get_logger
 
 logger = get_logger("batchTest")
@@ -67,6 +67,7 @@ def main() -> None:
 
     defaultParams: Dict[str, Any] = configManager.getDefaultParams()
     outputConfig: Dict[str, Any] = configManager.getOutputConfig()
+    cacheIdentity: Dict[str, Any] = buildCacheIdentity(config)
     loggingConfig: Dict[str, Any] = outputConfig.get("logging", {})
     baseResultsDir: str = outputConfig.get("resultsDir", "results")
 
@@ -85,6 +86,11 @@ def main() -> None:
 
     absTopLevelDir: str = os.path.abspath(topLevelDir)
     logger.info(f"本次运行结果将保存到: {absTopLevelDir}")
+    if outputConfig.get("enableCache", False):
+        logger.info(
+            f"缓存版本: {cacheIdentity['cacheVersion']}, "
+            f"代码指纹: {cacheIdentity['codeFingerprint'][:12]}"
+        )
 
     resultSaver: ResultSaver = ResultSaver(resultsDir=topLevelDir, outputConfig=outputConfig)
     visualizer: Visualizer = Visualizer(resultsDir=topLevelDir, outputConfig=outputConfig)
@@ -98,7 +104,8 @@ def main() -> None:
             testCase,
             config,
             testCaseManager,
-            defaultParams
+            defaultParams,
+            cacheIdentity
         )
 
         totalTestCount += len(testCaseResults)

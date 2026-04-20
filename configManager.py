@@ -32,6 +32,7 @@ class ConfigManager:
                     "resultsDir": "results",
                     "cacheDir": "cache",
                     "enableCache": True,
+                    "cacheVersion": 1,
                     "saveDetailedLog": False,
                     "showPlacementText": False,
                     "enableVisualization": True,
