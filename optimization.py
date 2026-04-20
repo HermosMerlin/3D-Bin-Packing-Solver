@@ -216,6 +216,41 @@ def _pack_items_into_container(
         load.add_placement(item, placement)
     return load
 
+def _pack_items_into_loads(
+    problem: ProblemInstance,
+    loads: List[ContainerLoad],
+    orderedItems: List[Item]
+) -> bool:
+    for item in orderedItems:
+        bestChoice = None
+        bestScore = None
+        for load in loads:
+            placement, _ = findBestPlacement(
+                load=load,
+                item=item,
+                allItems=problem.items,
+                globalConstraints=problem.globalConstraints
+            )
+            if placement is None:
+                continue
+            projectedFillRate = (
+                (load.totalVolume + item.volume) / load.container.volume
+                if load.container.volume > 0 else 0.0
+            )
+            score = (
+                projectedFillRate,
+                -load.weightRate,
+                -load.totalWeight
+            )
+            if bestScore is None or score > bestScore:
+                bestScore = score
+                bestChoice = (load, placement)
+        if bestChoice is None:
+            return False
+        chosenLoad, chosenPlacement = bestChoice
+        chosenLoad.add_placement(item, chosenPlacement)
+    return True
+
 def _cleanup_empty_loads(plan: ShipmentPlan) -> None:
     plan.containerLoads = [load for load in plan.containerLoads if load.placements]
 
@@ -265,6 +300,23 @@ def _try_relocate_item(
     if removed is None:
         return None
 
+    remainingSourceItems = [
+        itemLookup[placement.itemId]
+        for placement in sourceLoad.placements
+        if placement.itemId in itemLookup
+    ]
+    repackedSourceLoad = _pack_items_into_container(
+        problem,
+        _clone_container_instance(sourceLoad.container),
+        sorted(remainingSourceItems, key=lambda currentItem: currentItem.volume, reverse=True)
+    )
+    if repackedSourceLoad is None:
+        sourceLoad.placements.append(removed)
+        _recalculate_load_totals(sourceLoad, itemLookup)
+        return None
+    candidate.containerLoads[sourceIndex] = repackedSourceLoad
+    sourceLoad = repackedSourceLoad
+
     for targetIndex in _choose_target_load_indices(problem, candidate, sourceIndex):
         targetLoad = candidate.containerLoads[targetIndex]
         placement, _ = findBestPlacement(
@@ -283,8 +335,6 @@ def _try_relocate_item(
         return candidate
 
     # Rollback if no target accepted the item.
-    sourceLoad.placements.append(removed)
-    _recalculate_load_totals(sourceLoad, itemLookup)
     return None
 
 def _try_change_container_type(
@@ -461,6 +511,80 @@ def _try_merge_containers(
 
     return None
 
+def _try_reduce_container_count_same_type(
+    problem: ProblemInstance,
+    plan: ShipmentPlan
+) -> Optional[ShipmentPlan]:
+    if len(plan.containerLoads) <= 1:
+        return None
+
+    itemLookup = _get_problem_item_lookup(problem)
+    candidate = _clone_plan(plan)
+    loadsByType: Dict[str, List[Tuple[int, ContainerLoad]]] = {}
+    for index, load in enumerate(candidate.containerLoads):
+        if not load.placements:
+            continue
+        loadsByType.setdefault(load.container.containerTypeId, []).append((index, load))
+
+    viableTypes = [
+        (typeId, rows) for typeId, rows in loadsByType.items()
+        if len(rows) >= 2
+    ]
+    if not viableTypes:
+        return None
+
+    if problem.objective.primaryMetric == "totalCost":
+        viableTypes.sort(key=lambda row: (-len(row[1]), row[1][0][1].container.tripCost))
+    else:
+        viableTypes.sort(key=lambda row: -len(row[1]))
+
+    targetTypeId, typeLoads = viableTypes[0]
+    containerTemplate = typeLoads[0][1].container
+    targetLoadCount = len(typeLoads) - 1
+    if targetLoadCount <= 0:
+        return None
+
+    combinedItems = [
+        itemLookup[placement.itemId]
+        for _, load in typeLoads
+        for placement in load.placements
+        if placement.itemId in itemLookup
+    ]
+    if not combinedItems:
+        return None
+    combinedItems.sort(key=lambda item: item.volume, reverse=True)
+
+    newLoads = [
+        createEmptyLoad(
+            ContainerInstance(
+                instanceId=f"{targetTypeId}_repack_{index + 1:03d}",
+                containerTypeId=containerTemplate.containerTypeId,
+                L=containerTemplate.L,
+                W=containerTemplate.W,
+                H=containerTemplate.H,
+                maxWeight=containerTemplate.maxWeight,
+                tripCost=containerTemplate.tripCost,
+                metadata=dict(containerTemplate.metadata)
+            )
+        )
+        for index in range(targetLoadCount)
+    ]
+
+    packed = _pack_items_into_loads(problem, newLoads, combinedItems)
+    if not packed:
+        return None
+
+    remainingLoads = [
+        load for index, load in enumerate(candidate.containerLoads)
+        if index not in {row[0] for row in typeLoads}
+    ]
+    remainingLoads.extend(newLoads)
+    candidate.containerLoads = remainingLoads
+    _cleanup_empty_loads(candidate)
+    candidate.metrics = PlanMetrics()
+    evaluateObjective(problem, candidate)
+    return candidate
+
 def _generate_neighbor_plan(
     problem: ProblemInstance,
     currentPlan: ShipmentPlan,
@@ -476,6 +600,8 @@ def _generate_neighbor_plan(
             "close_container",
             "merge_containers",
             "merge_containers",
+            "reduce_container_count",
+            "reduce_container_count",
             "swap_order"
         ]
     else:
@@ -486,7 +612,8 @@ def _generate_neighbor_plan(
             "relocate_item",
             "relocate_item",
             "change_container_type",
-            "merge_containers"
+            "merge_containers",
+            "reduce_container_count"
         ]
     action = random.choice(actions)
 
@@ -513,6 +640,11 @@ def _generate_neighbor_plan(
 
     if action == "merge_containers":
         candidate = _try_merge_containers(problem, currentPlan)
+        if candidate is not None:
+            return candidate, None, action
+
+    if action == "reduce_container_count":
+        candidate = _try_reduce_container_count_same_type(problem, currentPlan)
         if candidate is not None:
             return candidate, None, action
 
@@ -544,7 +676,7 @@ def buildPlanFromOrder(
     typeUsageCount: Dict[str, int] = {}
     failedPlacementCache: Dict[Tuple[int, int, str], bool] = {}
 
-    for item in orderedItems:
+    for itemIndex, item in enumerate(orderedItems):
         bestExistingChoice = None
         bestExistingScore = None
 
