@@ -2,4 +2,5 @@ results/
 __pycache__/
 test/
 *.md
+!problem.md
 cache/

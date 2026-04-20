@@ -1,12 +1,21 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 class Item:
-    def __init__(self, id: int, l: float, w: float, h: float, weight: float):
+    def __init__(
+        self,
+        id: int,
+        l: float,
+        w: float,
+        h: float,
+        weight: float,
+        typeId: Optional[int] = None
+    ):
         self.id: int = id
         self.l: float = l
         self.w: float = w
         self.h: float = h
         self.weight: float = weight
+        self.typeId: Optional[int] = typeId
         self.volume: float = l * w * h
         self.rotation: int = 0
 

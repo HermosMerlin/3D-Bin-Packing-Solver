@@ -24,11 +24,19 @@ def _selectVisualizationResults(
     outputConfig: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     """Optionally visualize only the best result of each algorithm."""
+    validResults = [result for result in testCaseResults if result.get("isValid", False)]
+    skippedInvalidCount = len(testCaseResults) - len(validResults)
+    if skippedInvalidCount > 0:
+        logger.info(f"    跳过非法结果的可视化: {skippedInvalidCount}")
+
+    if not validResults:
+        return []
+
     if not outputConfig.get("visualizeBestPerAlgorithmOnly", False):
-        return testCaseResults
+        return validResults
 
     bestByAlgorithm: Dict[str, Dict[str, Any]] = {}
-    for result in testCaseResults:
+    for result in validResults:
         algorithmType = result.get("algorithmParams", {}).get("algorithmType", "unknown")
         currentBest = bestByAlgorithm.get(algorithmType)
         if currentBest is None or _resultRankKey(result) > _resultRankKey(currentBest):
@@ -40,7 +48,7 @@ def _selectVisualizationResults(
     )
     logger.info(
         f"    仅渲染每个算法的最佳方案: "
-        f"{len(selectedResults)}/{len(testCaseResults)}"
+        f"{len(selectedResults)}/{len(validResults)}"
     )
     return selectedResults
 

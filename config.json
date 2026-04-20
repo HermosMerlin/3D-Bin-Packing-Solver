@@ -25,6 +25,7 @@
         "cacheDir": "cache",
         "enableCache": true,
         "cacheVersion": 1,
+        "saveSolutionText": "only-best",
         "saveDetailedLog": false,
         "showPlacementText": false,
         "enableVisualization": true,

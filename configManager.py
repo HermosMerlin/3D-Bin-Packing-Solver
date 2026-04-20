@@ -33,6 +33,7 @@ class ConfigManager:
                     "cacheDir": "cache",
                     "enableCache": True,
                     "cacheVersion": 1,
+                    "saveSolutionText": "only-best",
                     "saveDetailedLog": False,
                     "showPlacementText": False,
                     "enableVisualization": True,

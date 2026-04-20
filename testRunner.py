@@ -9,6 +9,7 @@ from dataStructures import Item, Container, PackingSolution
 from optimization import optimizePacking, filterAlgorithmParams, formatAlgorithmParams
 from logger import get_logger
 from testCaseManager import TestCaseManager
+from solutionValidator import validatePackingSolution
 
 logger = get_logger("testRunner")
 
@@ -39,7 +40,8 @@ def generateItemsFromTypes(itemTypes: List[Dict[str, Any]]) -> List[Item]:
                 l=itemType["l"],
                 w=itemType["w"],
                 h=itemType["h"],
-                weight=itemType["weight"]
+                weight=itemType["weight"],
+                typeId=itemType.get("typeId")
             )
             items.append(item)
             itemIdCounter += 1
@@ -99,6 +101,55 @@ def _getCacheInvalidReason(
 
     return ""
 
+def _logValidationErrors(prefix: str, errors: List[str]) -> None:
+    logger.warning(f"{prefix}: detected {len(errors)} validation error(s)")
+    for error in errors[:5]:
+        logger.warning(f"      - {error}")
+    if len(errors) > 5:
+        logger.warning(f"      - ... {len(errors) - 5} more")
+
+def _buildResultPayload(
+    testCase: Dict[str, Any],
+    container: Container,
+    items: List[Item],
+    solution: PackingSolution,
+    algorithmType: str,
+    params: Dict[str, Any],
+    seed: int,
+    useTimeSeed: bool,
+    executionTime: float,
+    isCached: bool,
+    testIndex: int,
+    totalTests: int
+) -> Dict[str, Any]:
+    validation = validatePackingSolution(container, items, solution)
+    if not validation["isValid"]:
+        sourceLabel = "cached solution" if isCached else "computed solution"
+        _logValidationErrors(f"    ({sourceLabel} invalid)", validation["errors"])
+
+    return {
+        "testName": testCase["name"],
+        "testIndex": testIndex,
+        "totalTests": totalTests,
+        "container": container,
+        "items": items,
+        "itemTypes": testCase["itemTypes"],
+        "solution": solution,
+        "volumeRate": solution.volumeRate,
+        "weightRate": solution.weightRate,
+        "placedCount": len(solution.placedItems),
+        "algorithmParams": {
+            "algorithmType": algorithmType,
+            "params": params,
+            "seed": seed,
+            "useTimeSeed": useTimeSeed
+        },
+        "executionTime": executionTime,
+        "isCached": isCached,
+        "isValid": validation["isValid"],
+        "validationErrors": validation["errors"]
+    }
+
 def runSingleTest(
     testCase: Dict[str, Any],
     config: Dict[str, Any],
@@ -140,8 +191,6 @@ def runSingleTest(
 
                 invalidReason = _getCacheInvalidReason(cachedResult, cacheIdentity)
                 if not invalidReason:
-                    logger.info(f"    (缓存命中: {inputHash[:8]}...)")
-
                     containerData = testCase["container"]
                     container = Container(
                         L=containerData["L"],
@@ -151,27 +200,26 @@ def runSingleTest(
                     )
                     items = generateItemsFromTypes(testCase["itemTypes"])
                     solution = PackingSolution.from_dict(cachedResult["solution"])
+                    resultPayload = _buildResultPayload(
+                        testCase=testCase,
+                        container=container,
+                        items=items,
+                        solution=solution,
+                        algorithmType=algorithmType,
+                        params=params,
+                        seed=seed,
+                        useTimeSeed=useTimeSeed,
+                        executionTime=cachedResult.get("executionTime", 0.0),
+                        isCached=True,
+                        testIndex=testIndex,
+                        totalTests=totalTests
+                    )
 
-                    return {
-                        "testName": testCase["name"],
-                        "testIndex": testIndex,
-                        "totalTests": totalTests,
-                        "container": container,
-                        "items": items,
-                        "itemTypes": testCase["itemTypes"],
-                        "solution": solution,
-                        "volumeRate": solution.volumeRate,
-                        "weightRate": solution.weightRate,
-                        "placedCount": len(solution.placedItems),
-                        "algorithmParams": {
-                            "algorithmType": algorithmType,
-                            "params": params,
-                            "seed": seed,
-                            "useTimeSeed": useTimeSeed
-                        },
-                        "executionTime": cachedResult.get("executionTime", 0.0),
-                        "isCached": True
-                    }
+                    if resultPayload["isValid"]:
+                        logger.info(f"    (缓存命中: {inputHash[:8]}...)")
+                        return resultPayload
+
+                    invalidReason = "cached solution failed validation"
 
                 logger.info(f"    (缓存失效: {invalidReason})")
             except Exception as e:
@@ -197,8 +245,22 @@ def runSingleTest(
     )
 
     executionTime = time.time() - startTime
+    resultPayload = _buildResultPayload(
+        testCase=testCase,
+        container=container,
+        items=items,
+        solution=solution,
+        algorithmType=algorithmType,
+        params=params,
+        seed=seed,
+        useTimeSeed=useTimeSeed,
+        executionTime=executionTime,
+        isCached=False,
+        testIndex=testIndex,
+        totalTests=totalTests
+    )
 
-    if enableCache:
+    if enableCache and resultPayload["isValid"]:
         try:
             cacheData = {
                 "solution": solution.to_dict(),
@@ -211,27 +273,10 @@ def runSingleTest(
                 json.dump(cacheData, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"    (缓存写入失败: {e})")
+    elif enableCache and not resultPayload["isValid"]:
+        logger.warning("    (跳过缓存写入: solution failed validation)")
 
-    return {
-        "testName": testCase["name"],
-        "testIndex": testIndex,
-        "totalTests": totalTests,
-        "container": container,
-        "items": items,
-        "itemTypes": testCase["itemTypes"],
-        "solution": solution,
-        "volumeRate": solution.volumeRate,
-        "weightRate": solution.weightRate,
-        "placedCount": len(solution.placedItems),
-        "algorithmParams": {
-            "algorithmType": algorithmType,
-            "params": params,
-            "seed": seed,
-            "useTimeSeed": useTimeSeed
-        },
-        "executionTime": executionTime,
-        "isCached": False
-    }
+    return resultPayload
 
 def runTestSuite(
     testCase: Dict[str, Any],
