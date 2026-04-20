@@ -1,7 +1,38 @@
+import math
 import random
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Dict, Any, Callable, Tuple
 from packingLogic import simplePacking
 from dataStructures import Item, Container, PackingSolution
+
+ALGORITHM_PARAM_KEYS: Dict[str, Tuple[str, ...]] = {
+    "greedy_search": ("iterations",),
+    "simulated_annealing": ("iterations", "initialTemp", "coolingRate", "minTemp")
+}
+
+def getAlgorithmParamKeys(algorithmType: str) -> Tuple[str, ...]:
+    """Return ordered parameter names supported by the algorithm."""
+    return ALGORITHM_PARAM_KEYS.get(algorithmType, tuple())
+
+def filterAlgorithmParams(
+    algorithmType: str,
+    params: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Keep only parameters that are meaningful to the selected algorithm."""
+    params = params or {}
+    allowedKeys = getAlgorithmParamKeys(algorithmType)
+    if not allowedKeys:
+        return dict(params)
+    return {key: params[key] for key in allowedKeys if key in params}
+
+def formatAlgorithmParams(
+    algorithmType: str,
+    params: Optional[Dict[str, Any]]
+) -> str:
+    """Format algorithm parameters for logs and reports."""
+    filteredParams = filterAlgorithmParams(algorithmType, params)
+    if not filteredParams:
+        return "(default)"
+    return ", ".join(f"{key}={value}" for key, value in filteredParams.items())
 
 def greedySearch(
     container: Container, 
@@ -34,9 +65,6 @@ def greedySearch(
             currentItems = newItems
 
     return bestSolution
-
-import math
-
 def simulatedAnnealing(
     container: Container, 
     items: List[Item], 

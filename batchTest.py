@@ -91,10 +91,10 @@ def main() -> None:
                 vizFile = visualizer.generateVisualization(result, testName=testCaseName)
                 if vizFile:
                     successfulVisualizations += 1
-                    logger.info(f"    ✓ 可视化成功: {os.path.basename(vizFile)}")
+                    logger.info(f"    [OK] 可视化成功: {os.path.basename(vizFile)}")
                 else:
                     failedVisualizations += 1
-                    logger.warning(f"    ✗ 可视化失败")
+                    logger.warning("    [FAIL] 可视化失败")
         else:
             logger.info(f"    可视化已禁用")
 
