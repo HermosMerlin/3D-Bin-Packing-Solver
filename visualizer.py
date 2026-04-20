@@ -12,6 +12,15 @@ class Visualizer:
         self.outputConfig = outputConfig or {}
         os.makedirs(self.resultsDir, exist_ok=True)
 
+    def _getCasePackingDir(self, testName: str) -> str:
+        return os.path.join(self.resultsDir, "cases", testName, "visuals", "packing")
+
+    def _getCaseAnalysisDir(self, testName: str) -> str:
+        return os.path.join(self.resultsDir, "cases", testName, "visuals", "analysis")
+
+    def _getAggregateAnalysisDir(self) -> str:
+        return os.path.join(self.resultsDir, "aggregate", "visuals", "analysis")
+
     @staticmethod
     def _box_mesh(
         x: float,
@@ -82,8 +91,8 @@ class Visualizer:
         files: List[str] = []
         try:
             itemById = {item.id: item for item in result["items"]}
-            testFolder = os.path.join(self.resultsDir, testName)
-            os.makedirs(testFolder, exist_ok=True)
+            packingDir = self._getCasePackingDir(testName)
+            os.makedirs(packingDir, exist_ok=True)
 
             for containerLoad in result.get("containerLoads", []):
                 if not containerLoad.placements:
@@ -164,7 +173,7 @@ class Visualizer:
                 figure = go.Figure(data=traces, layout=layout)
                 filePath = os.path.abspath(
                     os.path.join(
-                        testFolder,
+                        packingDir,
                         f"packing_g{result['combinationIndex']:02d}_"
                         f"r{result['repeatIndex']:02d}_"
                         f"{containerLoad.container.instanceId}.html"
@@ -191,8 +200,11 @@ class Visualizer:
         if not scatterPlots:
             return files
 
-        testFolder = os.path.join(self.resultsDir, testName)
-        os.makedirs(testFolder, exist_ok=True)
+        if testName == "_combined":
+            analysisDir = self._getAggregateAnalysisDir()
+        else:
+            analysisDir = self._getCaseAnalysisDir(testName)
+        os.makedirs(analysisDir, exist_ok=True)
 
         for index, spec in enumerate(scatterPlots, start=1):
             level = spec.get("level", "group")
@@ -245,7 +257,7 @@ class Visualizer:
                 paper_bgcolor="white"
             )
             filePath = os.path.abspath(
-                os.path.join(testFolder, f"analysis_{level}_{index:02d}.html")
+                os.path.join(analysisDir, f"analysis_{level}_{index:02d}.html")
             )
             figure.write_html(filePath, include_plotlyjs=True)
             files.append(filePath)

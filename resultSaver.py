@@ -14,6 +14,24 @@ class ResultSaver:
         self.outputConfig = outputConfig or {}
         os.makedirs(self.resultsDir, exist_ok=True)
 
+    def _getCaseDir(self, testName: str) -> str:
+        return os.path.join(self.resultsDir, "cases", testName)
+
+    def _getCaseReportsDir(self, testName: str) -> str:
+        return os.path.join(self._getCaseDir(testName), "reports")
+
+    def _getCaseTablesDir(self, testName: str) -> str:
+        return os.path.join(self._getCaseDir(testName), "tables")
+
+    def _getCaseCsvDir(self, testName: str) -> str:
+        return os.path.join(self._getCaseTablesDir(testName), "csv")
+
+    def _getCaseJsonDir(self, testName: str) -> str:
+        return os.path.join(self._getCaseTablesDir(testName), "json")
+
+    def _getCasePlansDir(self, testName: str) -> str:
+        return os.path.join(self._getCaseDir(testName), "plans")
+
     @staticmethod
     def _normalizeSolutionTextMode(value: Any) -> str:
         if value is True:
@@ -247,18 +265,23 @@ class ResultSaver:
 
     def _writeAnalysisExports(
         self,
-        testFolder: str,
+        testName: str,
         timestamp: str,
         tables: Dict[str, List[Dict[str, Any]]]
     ) -> None:
         if not self.outputConfig.get("exportSummaryData", True):
             return
 
+        csvDir = self._getCaseCsvDir(testName)
+        jsonDir = self._getCaseJsonDir(testName)
+        os.makedirs(csvDir, exist_ok=True)
+        os.makedirs(jsonDir, exist_ok=True)
+
         for level, rows in tables.items():
             if not rows:
                 continue
-            csvPath = os.path.abspath(os.path.join(testFolder, f"{level}_{timestamp}.csv"))
-            jsonPath = os.path.abspath(os.path.join(testFolder, f"{level}_{timestamp}.json"))
+            csvPath = os.path.abspath(os.path.join(csvDir, f"{level}_{timestamp}.csv"))
+            jsonPath = os.path.abspath(os.path.join(jsonDir, f"{level}_{timestamp}.json"))
             self._writeCsv(csvPath, rows)
             self._writeJson(jsonPath, rows)
             logger.info(f"{level} CSV 已生成: {csvPath}")
@@ -268,12 +291,11 @@ class ResultSaver:
         self,
         result: Dict[str, Any],
         testName: str,
-        testFolder: str,
         timestamp: str,
         isBestOverall: bool
     ) -> str:
-        solutionFolder = os.path.join(testFolder, "solutions")
-        os.makedirs(solutionFolder, exist_ok=True)
+        planDir = self._getCasePlansDir(testName)
+        os.makedirs(planDir, exist_ok=True)
 
         algorithmType = result["algorithmParams"].get("algorithmType", "unknown")
         safeAlgorithm = self._sanitizeFileNamePart(algorithmType)
@@ -288,7 +310,7 @@ class ResultSaver:
                 f"{safeAlgorithm}_{timestamp}.txt"
             )
 
-        filePath = os.path.abspath(os.path.join(solutionFolder, filename))
+        filePath = os.path.abspath(os.path.join(planDir, filename))
         with open(filePath, "w", encoding="utf-8") as f:
             f.write("# Shipment Plan\n")
             f.write("schema_version: 2\n")
@@ -351,11 +373,13 @@ class ResultSaver:
         return filePath
 
     def saveResults(self, results: List[Dict[str, Any]], testName: str) -> Dict[str, Any]:
-        testFolder = os.path.join(self.resultsDir, testName)
-        os.makedirs(testFolder, exist_ok=True)
+        caseDir = self._getCaseDir(testName)
+        reportsDir = self._getCaseReportsDir(testName)
+        os.makedirs(caseDir, exist_ok=True)
+        os.makedirs(reportsDir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        reportPath = os.path.abspath(os.path.join(testFolder, f"results_{timestamp}.txt"))
+        reportPath = os.path.abspath(os.path.join(reportsDir, f"results_{timestamp}.txt"))
         bestValidResult = self._getBestValidResult(results)
         solutionTextResults = self._selectSolutionTextResults(results, bestValidResult)
         tables = self.buildAnalysisTables(results)
@@ -416,7 +440,7 @@ class ResultSaver:
             f.write("\n" + "=" * 80 + "\n")
 
         logger.info(f"对比报告已生成: {reportPath}")
-        self._writeAnalysisExports(testFolder, timestamp, tables)
+        self._writeAnalysisExports(testName, timestamp, tables)
 
         if solutionTextResults:
             logger.info(
@@ -427,7 +451,6 @@ class ResultSaver:
             self._writeSolutionText(
                 result=result,
                 testName=testName,
-                testFolder=testFolder,
                 timestamp=timestamp,
                 isBestOverall=(result == bestValidResult)
             )

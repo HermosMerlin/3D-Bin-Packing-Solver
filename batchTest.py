@@ -80,10 +80,16 @@ def main() -> None:
     runTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     topLevelDir = os.path.join(scriptDir, baseResultsDir, runTimestamp)
     os.makedirs(topLevelDir, exist_ok=True)
+    logsDir = os.path.join(topLevelDir, "logs")
+    aggregateCsvDir = os.path.join(topLevelDir, "aggregate", "tables", "csv")
+    aggregateJsonDir = os.path.join(topLevelDir, "aggregate", "tables", "json")
+    os.makedirs(logsDir, exist_ok=True)
+    os.makedirs(aggregateCsvDir, exist_ok=True)
+    os.makedirs(aggregateJsonDir, exist_ok=True)
 
     logFile = None
     if loggingConfig.get("saveToFile", True):
-        logFile = os.path.join(topLevelDir, "run.log")
+        logFile = os.path.join(logsDir, "run.log")
     setup_logging(
         log_level=loggingConfig.get("consoleLevel", "INFO"),
         log_file=logFile
@@ -142,8 +148,8 @@ def main() -> None:
         for level, rows in aggregateTables.items():
             if not rows:
                 continue
-            csvPath = os.path.abspath(os.path.join(topLevelDir, f"all_{level}.csv"))
-            jsonPath = os.path.abspath(os.path.join(topLevelDir, f"all_{level}.json"))
+            csvPath = os.path.abspath(os.path.join(aggregateCsvDir, f"all_{level}.csv"))
+            jsonPath = os.path.abspath(os.path.join(aggregateJsonDir, f"all_{level}.json"))
             _writeCsv(csvPath, rows)
             _writeJson(jsonPath, rows)
             logger.info(f"聚合 {level} CSV 已生成: {csvPath}")

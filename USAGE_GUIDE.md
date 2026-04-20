@@ -17,6 +17,7 @@ python batchTest.py
 ```
 
 4. 去 `results/<时间戳>/` 看报告、表格和图
+   现在输出已经按 `logs / cases / aggregate` 分层，不会再把所有文件堆在一起。
 
 ## 2. 主要改哪几个文件
 
@@ -408,33 +409,66 @@ python batchTest.py
 results/<时间戳>/
 ```
 
-### 每个测试集目录里
+当前目录结构是：
 
+```text
+results/<时间戳>/
+  logs/
+    run.log
+  cases/
+    <testName>/
+      reports/
+      tables/
+        csv/
+        json/
+      plans/
+      visuals/
+        packing/
+        analysis/
+  aggregate/
+    tables/
+      csv/
+      json/
+    visuals/
+      analysis/
+```
+
+### `cases/<testName>/reports/`
 - `results_*.txt`
   文本报告。先看这个。
-- `run_*.csv/json`
+
+### `cases/<testName>/tables/csv/` 和 `cases/<testName>/tables/json/`
+- `run_*`
   每次运行一行。
-- `group_*.csv/json`
+- `group_*`
   每组参数一行，最适合看调参结果。
-- `container_*.csv/json`
-  每个容器实例一行，适合看用了多少箱、每箱装得怎么样。
-- `placement_*.csv/json`
-  每个放置动作一行，适合查支撑、承压、姿态。
-- `solutions/plan_best_*.txt`
+- `container_*`
+  每个容器实例一行。
+- `placement_*`
+  每个放置动作一行。
+
+### `cases/<testName>/plans/`
+- `plan_best_*.txt`
   最优方案文本。
+
+### `cases/<testName>/visuals/packing/`
 - `packing_*.html`
   装箱三维图。
+
+### `cases/<testName>/visuals/analysis/`
 - `analysis_*.html`
   该测试集自己的分析图。
 
-### 顶层目录里
+### `aggregate/tables/csv/` 和 `aggregate/tables/json/`
+- `all_run.*`
+- `all_group.*`
+- `all_container.*`
+- `all_placement.*`
 
-- `all_run.csv/json`
-- `all_group.csv/json`
-- `all_container.csv/json`
-- `all_placement.csv/json`
+这些是所有测试集合并后的总表，适合后续筛选、画图和写论文。
 
-这些是所有测试集合并后的总表，适合后续自己做筛选、画图、写论文。
+### `aggregate/visuals/analysis/`
+- 聚合后的总分析图。
 
 ## 6. 常见实验怎么配
 
@@ -525,7 +559,7 @@ results/<时间戳>/
 1. 复制一个 `test/*.json`
 2. 改容器、货物、目标、分析图
 3. 跑 `python batchTest.py`
-4. 先看 `results_*.txt`
-5. 再看 `group_*.csv` 和图
+4. 先看 `cases/<testName>/reports/results_*.txt`
+5. 再看 `cases/<testName>/tables/csv/group_*.csv` 和图
 
 这样基本够用，不需要先看全部代码。
