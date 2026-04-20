@@ -36,6 +36,7 @@ class ConfigManager:
                     "showPlacementText": False,
                     "enableVisualization": True,
                     "saveStaticImage": False,
+                    "visualizeBestPerAlgorithmOnly": False,
                     "logging": {
                         "consoleLevel": "INFO",
                         "fileLevel": "DEBUG",

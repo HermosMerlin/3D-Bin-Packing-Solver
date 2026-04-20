@@ -28,6 +28,7 @@
         "showPlacementText": false,
         "enableVisualization": true,
         "saveStaticImage": false,
+        "visualizeBestPerAlgorithmOnly": true,
         "logging": {
             "consoleLevel": "INFO",
             "fileLevel": "DEBUG",
