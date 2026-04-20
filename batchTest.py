@@ -11,6 +11,7 @@ from configManager import ConfigManager
 from logger import get_logger, setup_logging
 from resultSaver import ResultSaver
 from testCaseManager import TestCaseManager
+from optimization import ALGORITHMS, getAlgorithmParamKeys
 from testRunner import buildCacheIdentity, runTestSuite
 from validation.runner import runValidationSuite
 from visualizer import Visualizer
@@ -100,6 +101,35 @@ def _override_algorithm_config(
         updated["repeatCount"] = args.repeat
     return updated
 
+def _make_default_algorithm_config(algorithmType: str) -> Dict[str, Any]:
+    config: Dict[str, Any] = {
+        "useTimeSeed": False,
+        "baseSeed": 42,
+        "repeatCount": 1
+    }
+    for key in getAlgorithmParamKeys(algorithmType):
+        if key == "iterations":
+            config[key] = 10
+        elif key == "initialTemp":
+            config[key] = 50.0
+        elif key == "coolingRate":
+            config[key] = 0.95
+        elif key == "minTemp":
+            config[key] = 0.1
+        elif key == "populationSize":
+            config[key] = 8
+        elif key == "eliteCount":
+            config[key] = 2
+        elif key == "tournamentSize":
+            config[key] = 3
+        elif key == "mutationRate":
+            config[key] = 0.25
+        elif key == "crossoverRate":
+            config[key] = 0.85
+        elif key == "localSearchSteps":
+            config[key] = 2
+    return config
+
 def _apply_runtime_overrides(
     config: Dict[str, Any],
     testCases: List[Dict[str, Any]],
@@ -114,11 +144,15 @@ def _apply_runtime_overrides(
     if args.algorithm:
         selectedAlgorithm = args.algorithm
         defaultAlgorithms = overridden.get("algorithmDefaults", {})
-        if selectedAlgorithm not in defaultAlgorithms:
+        if selectedAlgorithm not in ALGORITHMS:
             raise ValueError(f"未知算法: {selectedAlgorithm}")
+        baseAlgorithmConfig = defaultAlgorithms.get(
+            selectedAlgorithm,
+            _make_default_algorithm_config(selectedAlgorithm)
+        )
         overridden["algorithmDefaults"] = {
             selectedAlgorithm: _override_algorithm_config(
-                defaultAlgorithms[selectedAlgorithm],
+                baseAlgorithmConfig,
                 args
             )
         }
@@ -127,7 +161,7 @@ def _apply_runtime_overrides(
             if caseAlgorithms:
                 filtered = {
                     selectedAlgorithm: _override_algorithm_config(
-                        caseAlgorithms.get(selectedAlgorithm, defaultAlgorithms[selectedAlgorithm]),
+                        caseAlgorithms.get(selectedAlgorithm, baseAlgorithmConfig),
                         args
                     )
                 }

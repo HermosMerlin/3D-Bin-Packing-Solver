@@ -17,7 +17,24 @@ from solutionValidator import computePlanMetrics
 
 ALGORITHM_PARAM_KEYS: Dict[str, Tuple[str, ...]] = {
     "greedy_search": ("iterations",),
-    "simulated_annealing": ("iterations", "initialTemp", "coolingRate", "minTemp")
+    "simulated_annealing": ("iterations", "initialTemp", "coolingRate", "minTemp"),
+    "genetic_algorithm": (
+        "iterations",
+        "populationSize",
+        "eliteCount",
+        "tournamentSize",
+        "mutationRate",
+        "crossoverRate"
+    ),
+    "hybrid_memetic": (
+        "iterations",
+        "populationSize",
+        "eliteCount",
+        "tournamentSize",
+        "mutationRate",
+        "crossoverRate",
+        "localSearchSteps"
+    )
 }
 
 def getAlgorithmParamKeys(algorithmType: str) -> Tuple[str, ...]:
@@ -389,12 +406,88 @@ def _try_close_container(
     evaluateObjective(problem, candidate)
     return candidate
 
+def _try_merge_containers(
+    problem: ProblemInstance,
+    plan: ShipmentPlan
+) -> Optional[ShipmentPlan]:
+    if len(plan.containerLoads) <= 1:
+        return None
+
+    itemLookup = _get_problem_item_lookup(problem)
+    candidate = _clone_plan(plan)
+    activeLoads = [
+        (index, load) for index, load in enumerate(candidate.containerLoads)
+        if load.placements
+    ]
+    if len(activeLoads) < 2:
+        return None
+
+    activeLoads.sort(key=lambda row: (row[1].fillRate, row[1].container.tripCost))
+    sourceAIndex, loadA = activeLoads[0]
+    sourceBIndex, loadB = activeLoads[1]
+
+    combinedItems = [
+        itemLookup[placement.itemId]
+        for placement in loadA.placements + loadB.placements
+        if placement.itemId in itemLookup
+    ]
+    if not combinedItems:
+        return None
+
+    combinedItems.sort(key=lambda item: item.volume, reverse=True)
+    sourceCost = loadA.container.tripCost + loadB.container.tripCost
+
+    for containerType in sorted(
+        problem.containerTypes,
+        key=lambda container: (container.tripCost, container.volume)
+    ):
+        mergedContainer = _make_container_instance(containerType, sourceAIndex + 1)
+        mergedLoad = _pack_items_into_container(problem, mergedContainer, combinedItems)
+        if mergedLoad is None:
+            continue
+        if mergedLoad.container.tripCost >= sourceCost:
+            continue
+
+        remainingLoads = [
+            load for index, load in enumerate(candidate.containerLoads)
+            if index not in {sourceAIndex, sourceBIndex}
+        ]
+        remainingLoads.append(mergedLoad)
+        candidate.containerLoads = remainingLoads
+        _cleanup_empty_loads(candidate)
+        candidate.metrics = PlanMetrics()
+        evaluateObjective(problem, candidate)
+        return candidate
+
+    return None
+
 def _generate_neighbor_plan(
     problem: ProblemInstance,
     currentPlan: ShipmentPlan,
     currentItems: List[Item]
 ) -> Tuple[ShipmentPlan, Optional[List[Item]], str]:
-    actions = ["swap_order", "relocate_item", "change_container_type", "close_container"]
+    if problem.objective.primaryMetric == "totalCost":
+        actions = [
+            "relocate_item",
+            "relocate_item",
+            "change_container_type",
+            "change_container_type",
+            "close_container",
+            "close_container",
+            "merge_containers",
+            "merge_containers",
+            "swap_order"
+        ]
+    else:
+        actions = [
+            "swap_order",
+            "swap_order",
+            "swap_order",
+            "relocate_item",
+            "relocate_item",
+            "change_container_type",
+            "merge_containers"
+        ]
     action = random.choice(actions)
 
     if action == "swap_order" and len(currentItems) >= 2:
@@ -418,6 +511,11 @@ def _generate_neighbor_plan(
         if candidate is not None:
             return candidate, None, action
 
+    if action == "merge_containers":
+        candidate = _try_merge_containers(problem, currentPlan)
+        if candidate is not None:
+            return candidate, None, action
+
     return currentPlan, None, "no_op"
 
 def _container_type_sort_key(
@@ -426,10 +524,17 @@ def _container_type_sort_key(
     item: Item
 ) -> Tuple[float, ...]:
     objectiveMetric = problem.objective.primaryMetric
+    projectedFillRate = item.volume / containerType.volume if containerType.volume > 0 else 0.0
     if objectiveMetric == "totalCost":
-        return (containerType.tripCost, containerType.volume, containerType.maxWeight)
-    fillRate = item.volume / containerType.volume if containerType.volume > 0 else 0.0
-    return (-fillRate, containerType.tripCost, containerType.volume)
+        costPerVolume = containerType.tripCost / containerType.volume if containerType.volume > 0 else float("inf")
+        costPerWeight = containerType.tripCost / containerType.maxWeight if containerType.maxWeight > 0 else float("inf")
+        return (
+            costPerVolume,
+            costPerWeight,
+            -projectedFillRate,
+            containerType.tripCost
+        )
+    return (-projectedFillRate, containerType.tripCost, containerType.volume)
 
 def buildPlanFromOrder(
     problem: ProblemInstance,
@@ -518,6 +623,129 @@ def buildPlanFromOrder(
     evaluateObjective(problem, plan)
     return plan
 
+def _build_order_ids(items: List[Item]) -> List[int]:
+    return [item.id for item in items]
+
+def _build_order_from_ids(problem: ProblemInstance, orderIds: List[int]) -> List[Item]:
+    itemLookup = _get_problem_item_lookup(problem)
+    return [itemLookup[itemId] for itemId in orderIds if itemId in itemLookup]
+
+def _generate_initial_population(
+    problem: ProblemInstance,
+    populationSize: int
+) -> List[List[int]]:
+    baseItems = list(problem.items)
+    heuristics: List[List[int]] = []
+    heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.volume, reverse=True)))
+    heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.weight, reverse=True)))
+    heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.h, reverse=True)))
+    heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.l * item.w, reverse=True)))
+
+    seen = set()
+    population: List[List[int]] = []
+    for orderIds in heuristics:
+        key = tuple(orderIds)
+        if key not in seen:
+            seen.add(key)
+            population.append(orderIds)
+
+    while len(population) < populationSize:
+        shuffled = baseItems.copy()
+        random.shuffle(shuffled)
+        orderIds = _build_order_ids(shuffled)
+        key = tuple(orderIds)
+        if key in seen:
+            continue
+        seen.add(key)
+        population.append(orderIds)
+
+    return population[:populationSize]
+
+def _evaluate_order_population_member(
+    problem: ProblemInstance,
+    orderIds: List[int],
+    cache: Dict[Tuple[int, ...], ShipmentPlan]
+) -> ShipmentPlan:
+    signature = tuple(orderIds)
+    if signature not in cache:
+        cache[signature] = buildPlanFromOrder(problem, _build_order_from_ids(problem, orderIds))
+    return cache[signature]
+
+def _tournament_select(
+    problem: ProblemInstance,
+    population: List[List[int]],
+    cache: Dict[Tuple[int, ...], ShipmentPlan],
+    tournamentSize: int
+) -> List[int]:
+    competitors = random.sample(population, min(tournamentSize, len(population)))
+    best = competitors[0]
+    bestPlan = _evaluate_order_population_member(problem, best, cache)
+    for candidate in competitors[1:]:
+        candidatePlan = _evaluate_order_population_member(problem, candidate, cache)
+        if isPlanBetter(problem, candidatePlan, bestPlan):
+            best = candidate
+            bestPlan = candidatePlan
+    return list(best)
+
+def _order_crossover(parentA: List[int], parentB: List[int]) -> List[int]:
+    if len(parentA) < 2:
+        return list(parentA)
+    left, right = sorted(random.sample(range(len(parentA)), 2))
+    child = [None] * len(parentA)
+    child[left:right + 1] = parentA[left:right + 1]
+    fillValues = [gene for gene in parentB if gene not in child]
+    fillIndex = 0
+    for index in range(len(child)):
+        if child[index] is None:
+            child[index] = fillValues[fillIndex]
+            fillIndex += 1
+    return [int(gene) for gene in child]
+
+def _mutate_order(orderIds: List[int]) -> List[int]:
+    mutated = list(orderIds)
+    if len(mutated) < 2:
+        return mutated
+    if random.random() < 0.5:
+        indexA, indexB = random.sample(range(len(mutated)), 2)
+        mutated[indexA], mutated[indexB] = mutated[indexB], mutated[indexA]
+    else:
+        sourceIndex, targetIndex = random.sample(range(len(mutated)), 2)
+        gene = mutated.pop(sourceIndex)
+        mutated.insert(targetIndex, gene)
+    return mutated
+
+def _sort_population_by_fitness(
+    problem: ProblemInstance,
+    population: List[List[int]],
+    cache: Dict[Tuple[int, ...], ShipmentPlan]
+) -> List[List[int]]:
+    return sorted(
+        population,
+        key=lambda orderIds: buildPlanRankKey(
+            problem,
+            _evaluate_order_population_member(problem, orderIds, cache)
+        ),
+        reverse=True
+    )
+
+def _improve_plan_locally(
+    problem: ProblemInstance,
+    basePlan: ShipmentPlan,
+    steps: int
+) -> ShipmentPlan:
+    currentPlan = basePlan
+    bestPlan = basePlan
+    dummyOrder = list(problem.items)
+    for _ in range(max(0, steps)):
+        candidatePlan, _, action = _generate_neighbor_plan(problem, currentPlan, dummyOrder)
+        if action == "no_op":
+            continue
+        if isPlanBetter(problem, candidatePlan, currentPlan):
+            currentPlan = candidatePlan
+        if isPlanBetter(problem, currentPlan, bestPlan):
+            bestPlan = currentPlan
+    return bestPlan
+
 def greedySearch(
     problem: ProblemInstance,
     items: List[Item],
@@ -598,9 +826,123 @@ def simulatedAnnealing(
 
     return bestPlan
 
+def geneticAlgorithm(
+    problem: ProblemInstance,
+    items: List[Item],
+    params: Dict[str, Any]
+) -> ShipmentPlan:
+    generations = int(params.get("iterations", 10))
+    populationSize = int(params.get("populationSize", 8))
+    eliteCount = int(params.get("eliteCount", 2))
+    tournamentSize = int(params.get("tournamentSize", 3))
+    mutationRate = float(params.get("mutationRate", 0.25))
+    crossoverRate = float(params.get("crossoverRate", 0.85))
+
+    populationSize = max(2, populationSize)
+    eliteCount = max(1, min(eliteCount, populationSize))
+    population = _generate_initial_population(problem, populationSize)
+    cache: Dict[Tuple[int, ...], ShipmentPlan] = {}
+    population = _sort_population_by_fitness(problem, population, cache)
+    bestOrder = population[0]
+    bestPlan = _evaluate_order_population_member(problem, bestOrder, cache)
+
+    for _ in range(generations):
+        rankedPopulation = _sort_population_by_fitness(problem, population, cache)
+        nextPopulation = [list(orderIds) for orderIds in rankedPopulation[:eliteCount]]
+
+        while len(nextPopulation) < populationSize:
+            parentA = _tournament_select(problem, rankedPopulation, cache, tournamentSize)
+            parentB = _tournament_select(problem, rankedPopulation, cache, tournamentSize)
+
+            if random.random() < crossoverRate:
+                child = _order_crossover(parentA, parentB)
+            else:
+                child = list(parentA)
+
+            if random.random() < mutationRate:
+                child = _mutate_order(child)
+
+            nextPopulation.append(child)
+
+        population = nextPopulation
+        rankedPopulation = _sort_population_by_fitness(problem, population, cache)
+        candidateOrder = rankedPopulation[0]
+        candidatePlan = _evaluate_order_population_member(problem, candidateOrder, cache)
+        if isPlanBetter(problem, candidatePlan, bestPlan):
+            bestOrder = candidateOrder
+            bestPlan = candidatePlan
+
+    return bestPlan
+
+def hybridMemetic(
+    problem: ProblemInstance,
+    items: List[Item],
+    params: Dict[str, Any]
+) -> ShipmentPlan:
+    generations = int(params.get("iterations", 8))
+    populationSize = int(params.get("populationSize", 6))
+    eliteCount = int(params.get("eliteCount", 2))
+    tournamentSize = int(params.get("tournamentSize", 3))
+    mutationRate = float(params.get("mutationRate", 0.25))
+    crossoverRate = float(params.get("crossoverRate", 0.85))
+    localSearchSteps = int(params.get("localSearchSteps", 2))
+
+    populationSize = max(2, populationSize)
+    eliteCount = max(1, min(eliteCount, populationSize))
+    population = _generate_initial_population(problem, populationSize)
+    cache: Dict[Tuple[int, ...], ShipmentPlan] = {}
+    localPlanCache: Dict[Tuple[int, ...], ShipmentPlan] = {}
+
+    def evaluate_memetic(orderIds: List[int]) -> ShipmentPlan:
+        signature = tuple(orderIds)
+        if signature not in localPlanCache:
+            basePlan = _evaluate_order_population_member(problem, orderIds, cache)
+            localPlanCache[signature] = _improve_plan_locally(problem, basePlan, localSearchSteps)
+        return localPlanCache[signature]
+
+    def sort_memetic_population(sourcePopulation: List[List[int]]) -> List[List[int]]:
+        return sorted(
+            sourcePopulation,
+            key=lambda orderIds: buildPlanRankKey(problem, evaluate_memetic(orderIds)),
+            reverse=True
+        )
+
+    rankedPopulation = sort_memetic_population(population)
+    bestOrder = rankedPopulation[0]
+    bestPlan = evaluate_memetic(bestOrder)
+
+    for _ in range(generations):
+        nextPopulation = [list(orderIds) for orderIds in rankedPopulation[:eliteCount]]
+
+        while len(nextPopulation) < populationSize:
+            parentA = _tournament_select(problem, rankedPopulation, cache, tournamentSize)
+            parentB = _tournament_select(problem, rankedPopulation, cache, tournamentSize)
+
+            if random.random() < crossoverRate:
+                child = _order_crossover(parentA, parentB)
+            else:
+                child = list(parentA)
+
+            if random.random() < mutationRate:
+                child = _mutate_order(child)
+
+            nextPopulation.append(child)
+
+        population = nextPopulation
+        rankedPopulation = sort_memetic_population(population)
+        candidateOrder = rankedPopulation[0]
+        candidatePlan = evaluate_memetic(candidateOrder)
+        if isPlanBetter(problem, candidatePlan, bestPlan):
+            bestOrder = candidateOrder
+            bestPlan = candidatePlan
+
+    return bestPlan
+
 ALGORITHMS = {
     "greedy_search": greedySearch,
-    "simulated_annealing": simulatedAnnealing
+    "simulated_annealing": simulatedAnnealing,
+    "genetic_algorithm": geneticAlgorithm,
+    "hybrid_memetic": hybridMemetic
 }
 
 def optimizePacking(
