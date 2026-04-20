@@ -9,6 +9,7 @@ from dataStructures import (
 )
 
 TOLERANCE = 1e-9
+MAX_CANDIDATE_POSITIONS = 192
 
 def _rect_overlap(
     first: Tuple[float, float, float, float],
@@ -108,7 +109,8 @@ def _compute_candidate_positions(
         candidatePositions.add((placement.x + placedL, placement.y, placement.z + placedH))
         candidatePositions.add((placement.x, placement.y + placedW, placement.z + placedH))
 
-    return sorted(candidatePositions, key=lambda row: (row[2], row[1], row[0]))
+    sortedPositions = sorted(candidatePositions, key=lambda row: (row[2], row[1], row[0]))
+    return sortedPositions[:MAX_CANDIDATE_POSITIONS]
 
 def evaluatePlacement(
     load: ContainerLoad,

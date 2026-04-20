@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from itertools import product
@@ -383,6 +384,27 @@ class TestCaseManager:
             logger.error(f"校验测试用例 {filename} 时发生异常: {e}")
             return False
 
+    def _expandTestCaseVariants(
+        self,
+        testCase: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        expansion = testCase.get("expansion", {})
+        if not isinstance(expansion, dict) or not expansion.get("perContainerType", False):
+            return [testCase]
+
+        expandedCases: List[Dict[str, Any]] = []
+        baseName = str(testCase["name"])
+        for containerType in testCase["containerTypes"]:
+            expandedCase = copy.deepcopy(testCase)
+            expandedCase["containerTypes"] = [copy.deepcopy(containerType)]
+            expandedCase["name"] = f"{baseName}__{containerType['typeId']}"
+            scenarioMetadata = dict(expandedCase.get("scenarioMetadata", {}))
+            scenarioMetadata["expandedFrom"] = baseName
+            scenarioMetadata["expandedContainerTypeId"] = containerType["typeId"]
+            expandedCase["scenarioMetadata"] = scenarioMetadata
+            expandedCases.append(expandedCase)
+        return expandedCases
+
     def loadTestCases(self) -> List[Dict[str, Any]]:
         testCases: List[Dict[str, Any]] = []
         if not os.path.exists(self.testDir):
@@ -407,7 +429,7 @@ class TestCaseManager:
 
                     testCaseName = os.path.splitext(filename)[0]
                     testCase["name"] = testCaseName
-                    testCases.append(testCase)
+                    testCases.extend(self._expandTestCaseVariants(testCase))
                 except Exception as e:
                     logger.error(f"加载测试文件 {filename} 失败: {e}")
 
