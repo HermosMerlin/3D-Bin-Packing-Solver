@@ -36,6 +36,7 @@ ALGORITHM_PARAM_KEYS: Dict[str, Tuple[str, ...]] = {
         "localSearchSteps"
     )
 }
+LAYOUT_TOLERANCE = 1e-9
 
 def getAlgorithmParamKeys(algorithmType: str) -> Tuple[str, ...]:
     return ALGORITHM_PARAM_KEYS.get(algorithmType, tuple())
@@ -98,10 +99,11 @@ def _rank_transform(value: float, order: str) -> float:
 
 def buildPlanRankKey(problem: ProblemInstance, plan: ShipmentPlan) -> Tuple[float, ...]:
     metrics = evaluateObjective(problem, plan)
-    return tuple(
+    objectiveKey = tuple(
         _rank_transform(_get_metric_value(metrics, rule.metric), rule.order)
         for rule in _build_objective_rules(problem)
     )
+    return objectiveKey + _plan_layout_rank_key(problem, plan)
 
 def isPlanBetter(
     problem: ProblemInstance,
@@ -171,6 +173,194 @@ def _clone_plan(plan: ShipmentPlan) -> ShipmentPlan:
 
 def _get_problem_item_lookup(problem: ProblemInstance) -> Dict[int, Item]:
     return {item.id: item for item in problem.items}
+
+def _get_max_base_area(item: Item) -> float:
+    bestArea = 0.0
+    for rotation in item.constraints.allowedRotations:
+        dims = item.get_oriented_dims(rotation)
+        if dims is None:
+            continue
+        bestArea = max(bestArea, dims[0] * dims[1])
+    return bestArea
+
+def _support_role_rank(item: Item) -> int:
+    if item.has_tag("standard"):
+        return 0
+    if item.has_tag("oriented"):
+        return 1
+    if item.has_tag("fragile"):
+        return 2
+    return 1
+
+def _support_aware_order_key(item: Item) -> Tuple[float, ...]:
+    return (
+        _support_role_rank(item),
+        -_get_max_base_area(item),
+        -item.volume,
+        -item.weight,
+        -item.h
+    )
+
+def _fragile_late_order_key(item: Item) -> Tuple[float, ...]:
+    return (
+        1 if item.has_tag("fragile") else 0,
+        _support_role_rank(item),
+        -_get_max_base_area(item),
+        -item.volume,
+        -item.weight
+    )
+
+def _generate_candidate_item_orders(items: List[Item]) -> List[List[Item]]:
+    if not items:
+        return []
+
+    candidateOrders = [
+        list(items),
+        sorted(items, key=lambda item: item.volume, reverse=True),
+        sorted(items, key=lambda item: item.weight, reverse=True),
+        sorted(items, key=_support_aware_order_key),
+        sorted(items, key=_fragile_late_order_key)
+    ]
+
+    uniqueOrders: List[List[Item]] = []
+    seen = set()
+    for order in candidateOrders:
+        signature = tuple(item.id for item in order)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        uniqueOrders.append(order)
+    return uniqueOrders
+
+def _aggregate_layout_stats_for_load(
+    problem: ProblemInstance,
+    load: ContainerLoad
+) -> Tuple[int, float, int, float, int, float, int, float]:
+    itemLookup = _get_problem_item_lookup(problem)
+    hasStandard = any(
+        itemLookup.get(placement.itemId) is not None and
+        itemLookup[placement.itemId].has_tag("standard")
+        for placement in load.placements
+    )
+
+    floorFragileWithStandardCount = 0
+    floorFragileWithStandardArea = 0.0
+    floorFragileCount = 0
+    floorFragileArea = 0.0
+    supportedFragileCount = 0
+    supportedFragileArea = 0.0
+    standardFloorCount = 0
+    standardFloorArea = 0.0
+
+    for placement in load.placements:
+        item = itemLookup.get(placement.itemId)
+        if item is None:
+            continue
+        dims = item.get_oriented_dims(placement.rotation)
+        if dims is None:
+            continue
+        baseArea = dims[0] * dims[1]
+        onFloor = abs(placement.z) <= LAYOUT_TOLERANCE
+
+        if item.has_tag("fragile"):
+            if onFloor:
+                floorFragileCount += 1
+                floorFragileArea += baseArea
+                if hasStandard:
+                    floorFragileWithStandardCount += 1
+                    floorFragileWithStandardArea += baseArea
+            else:
+                supportedFragileCount += 1
+                supportedFragileArea += baseArea
+
+        if item.has_tag("standard") and onFloor:
+            standardFloorCount += 1
+            standardFloorArea += baseArea
+
+    return (
+        floorFragileWithStandardCount,
+        floorFragileWithStandardArea,
+        floorFragileCount,
+        floorFragileArea,
+        supportedFragileCount,
+        supportedFragileArea,
+        standardFloorCount,
+        standardFloorArea
+    )
+
+def _load_layout_rank_key(
+    problem: ProblemInstance,
+    load: ContainerLoad
+) -> Tuple[float, ...]:
+    (
+        floorFragileWithStandardCount,
+        floorFragileWithStandardArea,
+        floorFragileCount,
+        floorFragileArea,
+        supportedFragileCount,
+        supportedFragileArea,
+        standardFloorCount,
+        standardFloorArea
+    ) = _aggregate_layout_stats_for_load(problem, load)
+    return (
+        -float(floorFragileWithStandardCount),
+        -floorFragileWithStandardArea,
+        -float(floorFragileCount),
+        -floorFragileArea,
+        float(supportedFragileCount),
+        supportedFragileArea,
+        float(standardFloorCount),
+        standardFloorArea
+    )
+
+def _plan_layout_rank_key(problem: ProblemInstance, plan: ShipmentPlan) -> Tuple[float, ...]:
+    totals = [0.0] * 8
+    for load in plan.containerLoads:
+        loadStats = _aggregate_layout_stats_for_load(problem, load)
+        for index, value in enumerate(loadStats):
+            totals[index] += float(value)
+    return (
+        -totals[0],
+        -totals[1],
+        -totals[2],
+        -totals[3],
+        totals[4],
+        totals[5],
+        totals[6],
+        totals[7]
+    )
+
+def _plan_has_fragile_floor_conflict(problem: ProblemInstance, plan: ShipmentPlan) -> bool:
+    return any(
+        _aggregate_layout_stats_for_load(problem, load)[0] > 0
+        for load in plan.containerLoads
+    )
+
+def _best_repacked_load_for_items(
+    problem: ProblemInstance,
+    container: ContainerInstance,
+    items: List[Item]
+) -> Optional[ContainerLoad]:
+    bestLoad: Optional[ContainerLoad] = None
+    bestKey: Optional[Tuple[float, ...]] = None
+
+    for orderedItems in _generate_candidate_item_orders(items):
+        repackedLoad = _pack_items_into_container(
+            problem,
+            _clone_container_instance(container),
+            orderedItems
+        )
+        if repackedLoad is None:
+            continue
+        candidateKey = (
+            repackedLoad.fillRate,
+            * _load_layout_rank_key(problem, repackedLoad)
+        )
+        if bestKey is None or candidateKey > bestKey:
+            bestKey = candidateKey
+            bestLoad = repackedLoad
+
+    return bestLoad
 
 def _recalculate_load_totals(
     load: ContainerLoad,
@@ -305,10 +495,10 @@ def _try_relocate_item(
         for placement in sourceLoad.placements
         if placement.itemId in itemLookup
     ]
-    repackedSourceLoad = _pack_items_into_container(
+    repackedSourceLoad = _best_repacked_load_for_items(
         problem,
-        _clone_container_instance(sourceLoad.container),
-        sorted(remainingSourceItems, key=lambda currentItem: currentItem.volume, reverse=True)
+        sourceLoad.container,
+        remainingSourceItems
     )
     if repackedSourceLoad is None:
         sourceLoad.placements.append(removed)
@@ -374,7 +564,7 @@ def _try_change_container_type(
             containerType,
             targetIndex + 1
         )
-        repackedLoad = _pack_items_into_container(problem, replacement, loadItems)
+        repackedLoad = _best_repacked_load_for_items(problem, replacement, loadItems)
         if repackedLoad is None:
             continue
         candidate.containerLoads[targetIndex] = repackedLoad
@@ -416,7 +606,7 @@ def _try_close_container(
         for placement in sourceLoad.placements
         if placement.itemId in itemLookup
     ]
-    sourceItems.sort(key=lambda item: item.volume, reverse=True)
+    sourceItems.sort(key=_support_aware_order_key)
 
     remainingLoads = [
         load for index, load in enumerate(candidate.containerLoads)
@@ -484,7 +674,6 @@ def _try_merge_containers(
     if not combinedItems:
         return None
 
-    combinedItems.sort(key=lambda item: item.volume, reverse=True)
     sourceCost = loadA.container.tripCost + loadB.container.tripCost
 
     for containerType in sorted(
@@ -492,7 +681,7 @@ def _try_merge_containers(
         key=lambda container: (container.tripCost, container.volume)
     ):
         mergedContainer = _make_container_instance(containerType, sourceAIndex + 1)
-        mergedLoad = _pack_items_into_container(problem, mergedContainer, combinedItems)
+        mergedLoad = _best_repacked_load_for_items(problem, mergedContainer, combinedItems)
         if mergedLoad is None:
             continue
         if mergedLoad.container.tripCost >= sourceCost:
@@ -552,7 +741,7 @@ def _try_reduce_container_count_same_type(
     ]
     if not combinedItems:
         return None
-    combinedItems.sort(key=lambda item: item.volume, reverse=True)
+    combinedItems.sort(key=_support_aware_order_key)
 
     newLoads = [
         createEmptyLoad(
@@ -585,6 +774,66 @@ def _try_reduce_container_count_same_type(
     evaluateObjective(problem, candidate)
     return candidate
 
+def _try_repack_container_layout(
+    problem: ProblemInstance,
+    plan: ShipmentPlan
+) -> Optional[ShipmentPlan]:
+    if not plan.containerLoads:
+        return None
+
+    itemLookup = _get_problem_item_lookup(problem)
+    candidate = _clone_plan(plan)
+    rankedLoads = sorted(
+        [
+            (index, load) for index, load in enumerate(candidate.containerLoads)
+            if load.placements
+        ],
+        key=lambda row: _load_layout_rank_key(problem, row[1])
+    )
+    if not rankedLoads:
+        return None
+
+    for targetIndex, load in rankedLoads:
+        loadItems = [
+            itemLookup[placement.itemId]
+            for placement in load.placements
+            if placement.itemId in itemLookup
+        ]
+        if len(loadItems) < 2:
+            continue
+
+        currentLayoutKey = _load_layout_rank_key(problem, load)
+        repackedLoad = _best_repacked_load_for_items(problem, load.container, loadItems)
+        if repackedLoad is None:
+            continue
+        if _load_layout_rank_key(problem, repackedLoad) <= currentLayoutKey:
+            continue
+
+        candidate.containerLoads[targetIndex] = repackedLoad
+        candidate.metrics = PlanMetrics()
+        evaluateObjective(problem, candidate)
+        return candidate
+
+    return None
+
+def _repair_support_layout(
+    problem: ProblemInstance,
+    plan: ShipmentPlan,
+    maxPasses: int
+) -> ShipmentPlan:
+    if maxPasses <= 0 or not _plan_has_fragile_floor_conflict(problem, plan):
+        return plan
+
+    currentPlan = plan
+    for _ in range(maxPasses):
+        candidate = _try_repack_container_layout(problem, currentPlan)
+        if candidate is None or not isPlanBetter(problem, candidate, currentPlan):
+            break
+        currentPlan = candidate
+        if not _plan_has_fragile_floor_conflict(problem, currentPlan):
+            break
+    return currentPlan
+
 def _generate_neighbor_plan(
     problem: ProblemInstance,
     currentPlan: ShipmentPlan,
@@ -602,6 +851,8 @@ def _generate_neighbor_plan(
             "merge_containers",
             "reduce_container_count",
             "reduce_container_count",
+            "repack_container_layout",
+            "repack_container_layout",
             "swap_order"
         ]
     else:
@@ -613,7 +864,8 @@ def _generate_neighbor_plan(
             "relocate_item",
             "change_container_type",
             "merge_containers",
-            "reduce_container_count"
+            "reduce_container_count",
+            "repack_container_layout"
         ]
     action = random.choice(actions)
 
@@ -645,6 +897,11 @@ def _generate_neighbor_plan(
 
     if action == "reduce_container_count":
         candidate = _try_reduce_container_count_same_type(problem, currentPlan)
+        if candidate is not None:
+            return candidate, None, action
+
+    if action == "repack_container_layout":
+        candidate = _try_repack_container_layout(problem, currentPlan)
         if candidate is not None:
             return candidate, None, action
 
@@ -772,6 +1029,8 @@ def _generate_initial_population(
     heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.weight, reverse=True)))
     heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.h, reverse=True)))
     heuristics.append(_build_order_ids(sorted(baseItems, key=lambda item: item.l * item.w, reverse=True)))
+    heuristics.append(_build_order_ids(sorted(baseItems, key=_support_aware_order_key)))
+    heuristics.append(_build_order_ids(sorted(baseItems, key=_fragile_late_order_key)))
 
     seen = set()
     population: List[List[int]] = []
@@ -1029,7 +1288,12 @@ def hybridMemetic(
         signature = tuple(orderIds)
         if signature not in localPlanCache:
             basePlan = _evaluate_order_population_member(problem, orderIds, cache)
-            localPlanCache[signature] = _improve_plan_locally(problem, basePlan, localSearchSteps)
+            repairedPlan = _repair_support_layout(
+                problem,
+                basePlan,
+                maxPasses=max(1, min(2, localSearchSteps))
+            )
+            localPlanCache[signature] = _improve_plan_locally(problem, repairedPlan, localSearchSteps)
         return localPlanCache[signature]
 
     def sort_memetic_population(sourcePopulation: List[List[int]]) -> List[List[int]]:

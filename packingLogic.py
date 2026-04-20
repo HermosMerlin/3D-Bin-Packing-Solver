@@ -91,6 +91,46 @@ def _support_source_allowed(item: Item, supportItem: Item) -> bool:
             return True
     return False
 
+def _load_has_standard_item(load: ContainerLoad, itemLookup: Dict[int, Item]) -> bool:
+    return any(
+        itemLookup.get(placement.itemId) is not None and
+        itemLookup[placement.itemId].has_tag("standard")
+        for placement in load.placements
+    )
+
+def _placement_rank_key(
+    load: ContainerLoad,
+    item: Item,
+    placement: Placement,
+    itemLookup: Dict[int, Item]
+) -> Tuple[float, ...]:
+    hasStandardSupportOption = _load_has_standard_item(load, itemLookup)
+
+    if item.has_tag("fragile"):
+        floorPenalty = (
+            1
+            if placement.supportSource == "floor" and hasStandardSupportOption
+            else 0
+        )
+        return (
+            float(floorPenalty),
+            0.0 if placement.supportSource != "floor" else 1.0,
+            -placement.supportAreaRatio,
+            placement.z,
+            placement.y,
+            placement.x,
+            placement.bearingPressure
+        )
+
+    return (
+        0.0 if placement.supportSource == "floor" else 1.0,
+        placement.z,
+        placement.y,
+        placement.x,
+        -placement.supportAreaRatio,
+        placement.bearingPressure
+    )
+
 def _compute_candidate_positions(
     load: ContainerLoad,
     itemLookup: Dict[int, Item]
@@ -303,20 +343,8 @@ def findBestPlacement(
                 bestFeedback = feedback
                 continue
 
-            currentKey = (
-                placement.z,
-                placement.y,
-                placement.x,
-                -placement.supportAreaRatio,
-                placement.bearingPressure
-            )
-            bestKey = (
-                bestPlacement.z,
-                bestPlacement.y,
-                bestPlacement.x,
-                -bestPlacement.supportAreaRatio,
-                bestPlacement.bearingPressure
-            )
+            currentKey = _placement_rank_key(load, item, placement, itemLookup)
+            bestKey = _placement_rank_key(load, item, bestPlacement, itemLookup)
             if currentKey < bestKey:
                 bestPlacement = placement
                 bestFeedback = feedback
