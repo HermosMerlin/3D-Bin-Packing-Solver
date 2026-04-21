@@ -210,7 +210,7 @@ class Visualizer:
                     paper_bgcolor="white"
                 )
                 figure = go.Figure(data=traces, layout=layout)
-                filePath = os.path.abspath(
+                htmlPath = os.path.abspath(
                     os.path.join(
                         packingDir,
                         f"packing_g{result['combinationIndex']:02d}_"
@@ -218,9 +218,25 @@ class Visualizer:
                         f"{containerLoad.container.instanceId}.html"
                     )
                 )
-                figure.write_html(filePath, include_plotlyjs=True)
-                files.append(filePath)
-                logger.info(f"  装箱可视化已保存: {filePath}")
+                figure.write_html(htmlPath, include_plotlyjs=True)
+                files.append(htmlPath)
+                logger.info(f"  装箱可视化已保存: {htmlPath}")
+
+                if self.outputConfig.get("saveStaticImage", False):
+                    pngPath = os.path.abspath(
+                        os.path.join(
+                            packingDir,
+                            f"packing_g{result['combinationIndex']:02d}_"
+                            f"r{result['repeatIndex']:02d}_"
+                            f"{containerLoad.container.instanceId}.png"
+                        )
+                    )
+                    try:
+                        figure.write_image(pngPath)
+                        files.append(pngPath)
+                        logger.info(f"  装箱静态图已保存: {pngPath}")
+                    except Exception as imageError:
+                        logger.warning(f"  装箱静态图生成失败: {imageError}")
 
             return files
         except Exception as e:
